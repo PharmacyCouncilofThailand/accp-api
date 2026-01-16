@@ -3,7 +3,7 @@ import { db } from "../../database/index.js";
 import { users } from "../../database/schema.js";
 import { eq, desc, isNotNull } from "drizzle-orm";
 import z from "zod";
-import { sendVerificationApprovedEmail } from "../../services/emailService";
+import { sendVerificationApprovedEmail } from "../../services/emailService.js";
 
 const rejectSchema = z.object({
   reason: z.string().min(1, "Reason is required"),
