@@ -11,7 +11,7 @@ import {
   assignEventSchema,
 } from "../../schemas/backoffice-users.schema.js";
 import bcrypt from "bcryptjs";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, ne, and } from "drizzle-orm";
 
 export default async function (fastify: FastifyInstance) {
   // List Users
@@ -108,6 +108,23 @@ export default async function (fastify: FastifyInstance) {
     }
 
     const updates: any = { ...result.data };
+    
+    // Check email uniqueness if email is being updated
+    if (updates.email) {
+      const existingUser = await db
+        .select()
+        .from(backofficeUsers)
+        .where(and(
+          eq(backofficeUsers.email, updates.email),
+          ne(backofficeUsers.id, parseInt(id))
+        ))
+        .limit(1);
+
+      if (existingUser.length > 0) {
+        return reply.status(409).send({ error: "Email already exists" });
+      }
+    }
+
     if (updates.password) {
       updates.passwordHash = await bcrypt.hash(updates.password, 10);
       delete updates.password;
