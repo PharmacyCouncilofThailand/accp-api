@@ -1,5 +1,5 @@
 import { FastifyInstance } from "fastify";
-import { registerBodySchema } from "../../schemas/auth.schema";
+import { registerBodySchema } from "../../schemas/auth.schema.js";
 import { db } from "../../database/index.js";
 import { users } from "../../database/schema.js";
 import bcrypt from "bcryptjs";
