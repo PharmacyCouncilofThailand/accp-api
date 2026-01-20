@@ -105,3 +105,74 @@ export interface Speaker {
   bio?: string;
   photoUrl?: string;
 }
+
+// ============================================================================
+// JWT Payload Type (from authentication)
+// ============================================================================
+
+export interface JWTPayload {
+  id: number;
+  email: string;
+  role: StaffRole;
+}
+
+// ============================================================================
+// Update Payload Types (for PATCH requests)
+// ============================================================================
+
+export interface EventUpdatePayload {
+  conferenceCode?: string;
+  eventCode?: string;
+  eventName?: string;
+  description?: string | null;
+  eventType?: EventType;
+  location?: string | null;
+  startDate?: Date | string;
+  endDate?: Date | string;
+  maxCapacity?: number;
+  status?: EventStatus;
+  abstractStartDate?: Date | string;
+  abstractEndDate?: Date | string;
+  earlyBirdEndDate?: Date | string;
+  registrationStartDate?: Date | string;
+  registrationEndDate?: Date | string;
+  updatedAt?: Date;
+}
+
+export interface SessionUpdatePayload {
+  sessionName?: string;
+  sessionCode?: string;
+  description?: string;
+  room?: string | null;
+  startTime?: Date | string;
+  endTime?: Date | string;
+  maxCapacity?: number;
+  speakers?: string;
+  updatedAt?: Date;
+}
+
+export interface TicketTypeUpdatePayload {
+  name?: string;
+  description?: string;
+  category?: string;
+  price?: string;
+  thaiPrice?: string;
+  earlyBirdPrice?: string;
+  thaiEarlyBirdPrice?: string;
+  quota?: number;
+  saleStartDate?: Date | string;
+  saleEndDate?: Date | string;
+  isActive?: boolean;
+  updatedAt?: Date;
+}
+
+export interface BackofficeUserUpdatePayload {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  role?: StaffRole;
+  isActive?: boolean;
+  passwordHash?: string;
+  updatedAt?: Date;
+}
+

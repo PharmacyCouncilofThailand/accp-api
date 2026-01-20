@@ -12,6 +12,7 @@ import {
 } from "../../schemas/backoffice-users.schema.js";
 import bcrypt from "bcryptjs";
 import { eq, desc, ne, and } from "drizzle-orm";
+import { BCRYPT_ROUNDS } from "../../constants/auth.js";
 
 export default async function (fastify: FastifyInstance) {
   // List Users
@@ -77,7 +78,7 @@ export default async function (fastify: FastifyInstance) {
         return reply.status(409).send({ error: "Email already exists" });
       }
 
-      const passwordHash = await bcrypt.hash(password, 10);
+      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
       const [newUser] = await db
         .insert(backofficeUsers)
         .values({
@@ -107,7 +108,7 @@ export default async function (fastify: FastifyInstance) {
         .send({ error: "Invalid input", details: result.error.flatten() });
     }
 
-    const updates: any = { ...result.data };
+    const updates: Record<string, unknown> = { ...result.data };
     
     // Check email uniqueness if email is being updated
     if (updates.email) {
@@ -115,7 +116,7 @@ export default async function (fastify: FastifyInstance) {
         .select()
         .from(backofficeUsers)
         .where(and(
-          eq(backofficeUsers.email, updates.email),
+          eq(backofficeUsers.email, updates.email as string),
           ne(backofficeUsers.id, parseInt(id))
         ))
         .limit(1);
@@ -126,7 +127,7 @@ export default async function (fastify: FastifyInstance) {
     }
 
     if (updates.password) {
-      updates.passwordHash = await bcrypt.hash(updates.password, 10);
+      updates.passwordHash = await bcrypt.hash(updates.password as string, BCRYPT_ROUNDS);
       delete updates.password;
     }
 
