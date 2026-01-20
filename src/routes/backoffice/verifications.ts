@@ -43,7 +43,7 @@ export default async function (fastify: FastifyInstance) {
         rejectionReason: user.rejectionReason,
       }));
 
-      return reply.send({ verifications });
+      return reply.send({ pendingUsers: verifications });
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: "Failed to fetch verifications" });

@@ -125,6 +125,7 @@ import backofficeTicketsRoutes from "./routes/backoffice/tickets.js";
 import backofficeSessionsRoutes from "./routes/backoffice/sessions.js";
 import backofficePromoCodesRoutes from "./routes/backoffice/promoCodes.js";
 import publicSpeakersRoutes from "./routes/public/speakers.js";
+import publicEventsRoutes from "./routes/public/events.js";
 import abstractSubmitRoutes from "./routes/public/abstracts/submit.js";
 import userProfileRoutes from "./routes/public/users/profile.js";
 import userAbstractsRoutes from "./routes/public/abstracts/user.js";
@@ -149,6 +150,7 @@ fastify.register(uploadRoutes, { prefix: "/upload" });
 fastify.register(backofficeLoginRoutes, { prefix: "/backoffice" });
 
 // Public API routes
+fastify.register(publicEventsRoutes, { prefix: "/api/events" });
 fastify.register(publicSpeakersRoutes, { prefix: "/api/speakers" });
 fastify.register(abstractSubmitRoutes, { prefix: "/api/abstracts" });
 fastify.register(userProfileRoutes, { prefix: "/api/users" });
