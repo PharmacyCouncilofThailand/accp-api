@@ -17,6 +17,7 @@ import {
     eventQuerySchema,
 } from "../../schemas/events.schema.js";
 import { eq, desc, ilike, and, sql, count, inArray } from "drizzle-orm";
+import type { JWTPayload, EventUpdatePayload, SessionUpdatePayload, TicketTypeUpdatePayload } from "../../types/index.js";
 
 export default async function (fastify: FastifyInstance) {
     // ============================================================================
@@ -36,7 +37,7 @@ export default async function (fastify: FastifyInstance) {
         const offset = (page - 1) * limit;
 
         // Get user from request (set by auth middleware)
-        const user = (request as any).user;
+        const user = (request as { user?: JWTPayload }).user;
 
         try {
             // Build where conditions
@@ -241,7 +242,7 @@ export default async function (fastify: FastifyInstance) {
                 }
             }
 
-            const updates: any = {
+            const updates: Record<string, unknown> = {
                 ...data,
                 updatedAt: new Date(),
             };
@@ -369,7 +370,7 @@ export default async function (fastify: FastifyInstance) {
         }
 
         const data = result.data;
-        const updates: any = { ...data, updatedAt: new Date() };
+        const updates: Record<string, unknown> = { ...data, updatedAt: new Date() };
 
         if (data.startTime) updates.startTime = new Date(data.startTime);
         if (data.endTime) updates.endTime = new Date(data.endTime);
@@ -493,7 +494,7 @@ export default async function (fastify: FastifyInstance) {
         }
 
         const data = result.data;
-        const updates: any = { ...data };
+        const updates: Record<string, unknown> = { ...data };
 
         if (data.saleStartDate) updates.saleStartDate = new Date(data.saleStartDate);
         if (data.saleEndDate) updates.saleEndDate = new Date(data.saleEndDate);
