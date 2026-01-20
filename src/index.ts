@@ -5,14 +5,12 @@ import multipart from "@fastify/multipart";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
 
-// JWT Secret validation
+// JWT Secret validation - always required
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET && process.env.NODE_ENV === "production") {
-  console.error("❌ FATAL: JWT_SECRET required in production!");
-  process.exit(1);
-}
 if (!JWT_SECRET) {
-  console.warn("⚠️ WARNING: JWT_SECRET not set. Using default for development.");
+  console.error("❌ FATAL: JWT_SECRET environment variable is required!");
+  console.error("   Please set JWT_SECRET in your .env file");
+  process.exit(1);
 }
 
 const fastify = Fastify({ logger: true });
@@ -46,7 +44,7 @@ fastify.register(multipart, {
   },
 });
 fastify.register(jwt, {
-  secret: JWT_SECRET || "change-me-in-production",
+  secret: JWT_SECRET,
 });
 
 // Register routes

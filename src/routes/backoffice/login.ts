@@ -31,8 +31,6 @@ export default async function (fastify: FastifyInstance) {
         .where(eq(backofficeUsers.email, email))
         .limit(1);
 
-      console.log("DEBUG - Email:", email);
-      console.log("DEBUG - Staff found:", staffList.length);
 
       if (staffList.length === 0) {
         return reply.status(401).send({
@@ -42,7 +40,6 @@ export default async function (fastify: FastifyInstance) {
       }
 
       const staff = staffList[0];
-      console.log("DEBUG - Staff hash:", staff.passwordHash);
 
       // 3. Check active status
       if (!staff.isActive) {
@@ -54,7 +51,6 @@ export default async function (fastify: FastifyInstance) {
 
       // 4. Verify password
       const isValid = await bcrypt.compare(password, staff.passwordHash);
-      console.log("DEBUG - Password valid:", isValid);
 
       if (!isValid) {
         return reply.status(401).send({
