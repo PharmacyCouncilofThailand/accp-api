@@ -1,26 +1,44 @@
-import { Resend } from "resend";
+  import nodemailer, { Transporter } from "nodemailer";
 
-// Lazy Resend initialization
-let resendClient: Resend | null = null;
+// SMTP transporter (lazy initialization)
+let transporter: Transporter | null = null;
 
-function getResendClient(): Resend {
-  if (!resendClient) {
-    if (!process.env.RESEND_API_KEY) {
+/**
+ * Get configured SMTP transporter
+ * Uses SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS from environment
+ */
+function getTransporter(): Transporter {
+  if (!transporter) {
+    // Validate required SMTP config
+    if (
+      !process.env.SMTP_HOST ||
+      !process.env.SMTP_USER ||
+      !process.env.SMTP_PASS
+    ) {
       throw new Error(
-        "RESEND_API_KEY not configured. Set RESEND_API_KEY in .env"
+        "SMTP not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS in .env",
       );
     }
-    resendClient = new Resend(process.env.RESEND_API_KEY);
+
+    transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT || "587"),
+      secure: process.env.SMTP_SECURE === "true", // true for 465, false for other ports
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
   }
-  return resendClient;
+  return transporter;
 }
 
 /**
  * Get the sender email address
- * Uses EMAIL_FROM or falls back to Resend's testing domain
+ * Uses EMAIL_FROM from environment
  */
 function getFromEmail(): string {
-  return process.env.EMAIL_FROM || "ACCP Conference <onboarding@resend.dev>";
+  return process.env.EMAIL_FROM || "ACCP Conference <noreply@accp2026.com>";
 }
 
 /**
@@ -31,12 +49,12 @@ export async function sendAbstractSubmissionEmail(
   firstName: string,
   lastName: string,
   abstractId: number,
-  abstractTitle: string
+  abstractTitle: string,
 ): Promise<void> {
   try {
-    const { error } = await getResendClient().emails.send({
+    await getTransporter().sendMail({
       from: getFromEmail(),
-      to: [email],
+      to: email,
       subject: "Abstract Submission Confirmation - ACCP 2026",
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -91,10 +109,6 @@ export async function sendAbstractSubmissionEmail(
       `,
     });
 
-    if (error) {
-      console.error("Error sending abstract submission email:", error);
-      throw error;
-    }
     console.log(`Abstract submission email sent to ${email}`);
   } catch (error) {
     console.error("Error sending abstract submission email:", error);
@@ -111,12 +125,12 @@ export async function sendCoAuthorNotificationEmail(
   lastName: string,
   mainAuthorName: string,
   abstractId: number,
-  abstractTitle: string
+  abstractTitle: string,
 ): Promise<void> {
   try {
-    const { error } = await getResendClient().emails.send({
+    await getTransporter().sendMail({
       from: getFromEmail(),
-      to: [email],
+      to: email,
       subject: "You've been added as Co-Author - ACCP 2026 Abstract",
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -171,18 +185,12 @@ export async function sendCoAuthorNotificationEmail(
       `,
     });
 
-    if (error) {
-      console.error("Error sending co-author notification email:", error);
-      throw error;
-    }
     console.log(`Co-author notification email sent to ${email}`);
   } catch (error) {
     console.error("Error sending co-author notification email:", error);
     throw error;
   }
 }
-
-
 
 /**
  * Send pending approval email to students (thstd, interstd)
@@ -191,33 +199,35 @@ export async function sendCoAuthorNotificationEmail(
 export async function sendPendingApprovalEmail(
   email: string,
   firstName: string,
-  lastName: string
+  lastName: string,
 ): Promise<void> {
-  const { error } = await getResendClient().emails.send({
-    from: getFromEmail(),
-    to: [email],
-    subject: "Registration Received - Pending Verification",
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #2563eb;">Thank you for registering!</h2>
-        <p>Dear ${firstName} ${lastName},</p>
-        <p>We have received your registration request for <strong>ACCP Conference 2026</strong>.</p>
-        <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 20px 0;">
-          <strong>Your account is currently pending verification.</strong>
-          <p style="margin: 10px 0 0 0;">Our team will review your submitted documents and verify your student status.</p>
+  try {
+    await getTransporter().sendMail({
+      from: getFromEmail(),
+      to: email,
+      subject: "Registration Received - Pending Verification",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #2563eb;">Thank you for registering!</h2>
+          <p>Dear ${firstName} ${lastName},</p>
+          <p>We have received your registration request for <strong>ACCP Conference 2026</strong>.</p>
+          <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; margin: 20px 0;">
+            <strong>Your account is currently pending verification.</strong>
+            <p style="margin: 10px 0 0 0;">Our team will review your submitted documents and verify your student status.</p>
+          </div>
+          <p>You will receive another email once your account has been approved.</p>
+          <p>This process typically takes <strong>5-7 business days</strong>.</p>
+          <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;"/>
+          <p style="color: #6b7280; font-size: 14px;">
+            If you have any questions, please contact us at <a href="mailto:support@accp.com">support@accp.com</a>
+          </p>
+          <p style="color: #374151;">Best regards,<br/><strong>ACCP Conference Team</strong></p>
         </div>
-        <p>You will receive another email once your account has been approved.</p>
-        <p>This process typically takes <strong>5-7 business days</strong>.</p>
-        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;"/>
-        <p style="color: #6b7280; font-size: 14px;">
-          If you have any questions, please contact us at <a href="mailto:support@accp.com">support@accp.com</a>
-        </p>
-        <p style="color: #374151;">Best regards,<br/><strong>ACCP Conference Team</strong></p>
-      </div>
-    `,
-  });
+      `,
+    });
 
-  if (error) {
+    console.log(`Pending approval email sent to ${email}`);
+  } catch (error) {
     console.error("Error sending pending approval email:", error);
     throw error;
   }
@@ -229,37 +239,39 @@ export async function sendPendingApprovalEmail(
  */
 export async function sendVerificationApprovedEmail(
   email: string,
-  firstName: string
+  firstName: string,
 ): Promise<void> {
   const loginUrl = process.env.BASE_URL
     ? `${process.env.BASE_URL}/login`
     : "http://localhost:3000/login";
 
-  const { error } = await getResendClient().emails.send({
-    from: getFromEmail(),
-    to: [email],
-    subject: "Account Approved - ACCP Conference 2026",
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #10b981;">Verification Successful!</h2>
-        <p>Dear ${firstName},</p>
-        <p>Great news! Your student documents have been verified and your account is now <strong>active</strong>.</p>
-        <p>You can now log in to access your dashboard and complete your registration payment.</p>
-        
-        <div style="margin: 30px 0; text-align: center;">
-          <a href="${loginUrl}" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">Login to Your Account</a>
+  try {
+    await getTransporter().sendMail({
+      from: getFromEmail(),
+      to: email,
+      subject: "Account Approved - ACCP Conference 2026",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #10b981;">Verification Successful!</h2>
+          <p>Dear ${firstName},</p>
+          <p>Great news! Your student documents have been verified and your account is now <strong>active</strong>.</p>
+          <p>You can now log in to access your dashboard and complete your registration payment.</p>
+          
+          <div style="margin: 30px 0; text-align: center;">
+            <a href="${loginUrl}" style="background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">Login to Your Account</a>
+          </div>
+
+          <p>If the button doesn't work, copy and paste this link into your browser:</p>
+          <p style="color: #6b7280; word-break: break-all;">${loginUrl}</p>
+
+          <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;"/>
+          <p style="color: #374151;">Best regards,<br/><strong>ACCP Conference Team</strong></p>
         </div>
+      `,
+    });
 
-        <p>If the button doesn't work, copy and paste this link into your browser:</p>
-        <p style="color: #6b7280; word-break: break-all;">${loginUrl}</p>
-
-        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;"/>
-        <p style="color: #374151;">Best regards,<br/><strong>ACCP Conference Team</strong></p>
-      </div>
-    `,
-  });
-
-  if (error) {
+    console.log(`Verification approved email sent to ${email}`);
+  } catch (error) {
     console.error("Error sending verification approved email:", error);
     throw error;
   }
