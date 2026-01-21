@@ -10,6 +10,7 @@ const ticketQuerySchema = z.object({
     search: z.string().optional(),
     eventId: z.coerce.number().optional(),
     category: z.enum(['primary', 'addon']).optional(),
+    role: z.string().optional(),
 });
 
 export default async function (fastify: FastifyInstance) {
@@ -20,7 +21,7 @@ export default async function (fastify: FastifyInstance) {
             return reply.status(400).send({ error: "Invalid query", details: queryResult.error.flatten() });
         }
 
-        const { page, limit, search, eventId, category } = queryResult.data;
+        const { page, limit, search, eventId, category, role } = queryResult.data;
         const offset = (page - 1) * limit;
 
         // Get user from request (set by auth middleware)
@@ -61,6 +62,7 @@ export default async function (fastify: FastifyInstance) {
                 );
             }
             if (category) conditions.push(eq(ticketTypes.category, category));
+            if (role) conditions.push(ilike(ticketTypes.allowedRoles, `%${role}%`));
 
             const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 

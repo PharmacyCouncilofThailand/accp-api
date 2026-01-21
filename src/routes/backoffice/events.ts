@@ -273,11 +273,38 @@ export default async function (fastify: FastifyInstance) {
     // Delete Event
     fastify.delete("/:id", async (request, reply) => {
         const { id } = request.params as { id: string };
+        const eventId = parseInt(id);
 
         try {
+            // Check for related tickets
+            const relatedTickets = await db
+                .select({ id: ticketTypes.id })
+                .from(ticketTypes)
+                .where(eq(ticketTypes.eventId, eventId))
+                .limit(1);
+
+            if (relatedTickets.length > 0) {
+                return reply.status(409).send({
+                    error: "Cannot delete event with existing tickets. Please delete all tickets first."
+                });
+            }
+
+            // Check for related sessions
+            const relatedSessions = await db
+                .select({ id: sessions.id })
+                .from(sessions)
+                .where(eq(sessions.eventId, eventId))
+                .limit(1);
+
+            if (relatedSessions.length > 0) {
+                return reply.status(409).send({
+                    error: "Cannot delete event with existing sessions. Please delete all sessions first."
+                });
+            }
+
             const [deletedEvent] = await db
                 .delete(events)
-                .where(eq(events.id, parseInt(id)))
+                .where(eq(events.id, eventId))
                 .returning();
 
             if (!deletedEvent) {
