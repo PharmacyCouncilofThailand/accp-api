@@ -37,7 +37,6 @@ function validateWordCount(background: string, methods: string, results: string,
   };
 }
 
-// [FIX] Helper function for delay to prevent rate limiting
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default async function (fastify: FastifyInstance) {
@@ -154,7 +153,7 @@ export default async function (fastify: FastifyInstance) {
         });
       }
 
-      // Upload file to Google Drive
+      // Upload file to Google Drive (BLOCKING - Keep this to ensure file safety)
       let fullPaperUrl: string;
       try {
         fullPaperUrl = await uploadToGoogleDrive(
@@ -221,47 +220,57 @@ export default async function (fastify: FastifyInstance) {
         await db.insert(abstractCoAuthors).values(coAuthorsToInsert);
       }
 
-      // Send confirmation email to main author
-      try {
-        const { sendAbstractSubmissionEmail, sendCoAuthorNotificationEmail } = await import("../../../services/emailService.js");
-        
-        await sendAbstractSubmissionEmail(
-          email,
-          firstName,
-          lastName,
-          newAbstract.id,
-          title
-        );
-        
-        fastify.log.info(`Abstract submission email sent to ${email}`);
-
-        // Send notification emails to all co-authors
-        if (coAuthors && coAuthors.length > 0) {
-          const mainAuthorName = `${firstName} ${lastName}`;
+      // -----------------------------------------------------------------------
+      // Email Sending
+      // -----------------------------------------------------------------------
+      const runEmailTasksInBackground = async () => {
+        try {
+          const { sendAbstractSubmissionEmail, sendCoAuthorNotificationEmail } = await import("../../../services/emailService.js");
           
-          for (const coAuthor of coAuthors) {
-            await delay(700);
-            try {
-              await sendCoAuthorNotificationEmail(
-                coAuthor.email,
-                coAuthor.firstName,
-                coAuthor.lastName,
-                mainAuthorName,
-                newAbstract.id,
-                title
-              );
-              fastify.log.info(`Co-author notification sent to ${coAuthor.email}`);
-            } catch (emailError) {
-              // Log error but don't fail the submission
-              fastify.log.error({ err: emailError }, `Failed to send co-author email to ${coAuthor.email}`);
+          // 1. Send to Main Author
+          await sendAbstractSubmissionEmail(
+            email,
+            firstName,
+            lastName,
+            newAbstract.id,
+            title
+          );
+          
+          fastify.log.info(`Background: Abstract submission email sent to ${email}`);
+
+          // 2. Send to Co-authors (with delay to prevent Rate Limit)
+          if (coAuthors && coAuthors.length > 0) {
+            const mainAuthorName = `${firstName} ${lastName}`;
+            
+            for (const coAuthor of coAuthors) {
+              await delay(800); 
+
+              try {
+                await sendCoAuthorNotificationEmail(
+                  coAuthor.email,
+                  coAuthor.firstName,
+                  coAuthor.lastName,
+                  mainAuthorName,
+                  newAbstract.id,
+                  title
+                );
+                fastify.log.info(`Background: Co-author notification sent to ${coAuthor.email}`);
+              } catch (emailError) {
+                // Log error but don't stop the loop
+                fastify.log.error({ err: emailError }, `Failed to send co-author email to ${coAuthor.email}`);
+              }
             }
           }
+        } catch (emailError) {
+          // Log general email failure
+          fastify.log.error({ err: emailError }, "Background email task encountered an error");
         }
-      } catch (emailError) {
-        // Log error but don't fail the submission
-        fastify.log.error({ err: emailError }, "Failed to send confirmation emails");
-      }
+      };
 
+      // Execute background task without awaiting it
+      runEmailTasksInBackground();
+
+      // Return response immediately after DB insert (Response time ~3-5s)
       return reply.status(201).send({
         success: true,
         abstract: {
@@ -272,6 +281,7 @@ export default async function (fastify: FastifyInstance) {
         },
         message: "Abstract submitted successfully",
       });
+
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({
