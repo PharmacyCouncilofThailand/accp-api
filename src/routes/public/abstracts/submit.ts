@@ -37,12 +37,14 @@ function validateWordCount(background: string, methods: string, results: string,
   };
 }
 
+// [FIX] Helper function for delay to prevent rate limiting
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export default async function (fastify: FastifyInstance) {
   /**
    * Submit Abstract
    * POST /api/abstracts/submit
-   * 
-   * Accepts multipart/form-data with abstract information and PDF file
+   * * Accepts multipart/form-data with abstract information and PDF file
    */
   fastify.post("/submit", {}, async (request, reply) => {
     try {
@@ -238,6 +240,7 @@ export default async function (fastify: FastifyInstance) {
           const mainAuthorName = `${firstName} ${lastName}`;
           
           for (const coAuthor of coAuthors) {
+            await delay(700);
             try {
               await sendCoAuthorNotificationEmail(
                 coAuthor.email,
