@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { abstracts, events, users } from "../../database/schema.js";
+import { abstracts, abstractCoAuthors, events, users } from "../../database/schema.js";
 import { abstractListSchema, updateAbstractStatusSchema } from "../../schemas/abstracts.schema.js";
 import { eq, desc, ilike, and, or, count } from "drizzle-orm";
 
@@ -47,6 +47,11 @@ export default async function (fastify: FastifyInstance) {
                     title: abstracts.title,
                     category: abstracts.category,
                     presentationType: abstracts.presentationType,
+                    keywords: abstracts.keywords,
+                    background: abstracts.background,
+                    methods: abstracts.methods,
+                    results: abstracts.results,
+                    conclusion: abstracts.conclusion,
                     status: abstracts.status,
                     fullPaperUrl: abstracts.fullPaperUrl,
                     createdAt: abstracts.createdAt,
@@ -54,6 +59,8 @@ export default async function (fastify: FastifyInstance) {
                         firstName: users.firstName,
                         lastName: users.lastName,
                         email: users.email,
+                        phone: users.phone,
+                        country: users.country,
                         institution: users.institution,
                     },
                     event: {
@@ -69,8 +76,23 @@ export default async function (fastify: FastifyInstance) {
                 .limit(limit)
                 .offset(offset);
 
+            // Fetch co-authors for each abstract
+            const abstractIds = abstractList.map(a => a.id);
+            const coAuthorsList = abstractIds.length > 0
+                ? await db
+                    .select()
+                    .from(abstractCoAuthors)
+                    .where(or(...abstractIds.map(id => eq(abstractCoAuthors.abstractId, id))))
+                : [];
+
+            // Merge co-authors with abstracts
+            const abstractsWithCoAuthors = abstractList.map(abs => ({
+                ...abs,
+                coAuthors: coAuthorsList.filter(ca => ca.abstractId === abs.id)
+            }));
+
             return reply.send({
-                abstracts: abstractList,
+                abstracts: abstractsWithCoAuthors,
                 pagination: {
                     page,
                     limit,
