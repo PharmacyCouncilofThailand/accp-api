@@ -17,6 +17,7 @@
     "@fastify/jwt": "^9.0.2",
     "@fastify/multipart": "^9.3.0",
     "@fastify/rate-limit": "^10.3.0",
+    "axios": "^1.13.2",
     "bcryptjs": "^3.0.3",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.38.3",
