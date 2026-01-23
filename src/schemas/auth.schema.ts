@@ -26,4 +26,17 @@ export const loginBodySchema = z.object({
 });
 
 export type RegisterInput = z.infer<typeof registerBodySchema>;
-// export const registerSchema ... (removed wrapper to simplify manual usage)
+
+// Forgot Password Schema
+export const forgotPasswordSchema = z.object({
+  email: z.string().email("Invalid email address"),
+});
+
+// Reset Password Schema
+export const resetPasswordSchema = z.object({
+  token: z.string().min(1, "Token is required"),
+  newPassword: z.string().min(6, "Password must be at least 6 characters"),
+});
+
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
