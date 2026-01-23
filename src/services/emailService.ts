@@ -264,3 +264,72 @@ export async function sendVerificationApprovedEmail(
     throw error;
   }
 }
+
+/**
+ * Send password reset email
+ */
+export async function sendPasswordResetEmail(
+  email: string,
+  firstName: string,
+  resetToken: string
+): Promise<void> {
+  const resetUrl = process.env.BASE_URL
+    ? `${process.env.BASE_URL}/reset-password?token=${resetToken}`
+    : `http://localhost:3000/reset-password?token=${resetToken}`;
+
+  const { error } = await getResendClient().emails.send({
+    from: getFromEmail(),
+    to: [email],
+    subject: "Reset Your Password - ACCP Conference 2026",
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #1a237e; margin-bottom: 10px;">ACCP 2026</h1>
+          <p style="color: #666; font-size: 16px;">Password Reset Request</p>
+        </div>
+        
+        <div style="background: #f8f9fa; border-radius: 12px; padding: 30px; margin-bottom: 30px;">
+          <h2 style="color: #1a1a1a; font-size: 20px; margin-bottom: 20px;">🔐 Reset Your Password</h2>
+          
+          <p style="color: #333; font-size: 16px; line-height: 1.6; margin-bottom: 15px;">
+            Dear <strong>${firstName}</strong>,
+          </p>
+          
+          <p style="color: #333; font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
+            We received a request to reset your password. Click the button below to create a new password:
+          </p>
+          
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${resetUrl}" style="background-color: #1a237e; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px;">
+              Reset Password
+            </a>
+          </div>
+          
+          <div style="background: #fff3cd; border-radius: 8px; padding: 15px; margin: 20px 0;">
+            <p style="color: #856404; font-size: 14px; line-height: 1.6; margin: 0;">
+              ⏰ <strong>This link will expire in 1 hour.</strong><br/>
+              If you didn't request this, please ignore this email.
+            </p>
+          </div>
+          
+          <p style="color: #666; font-size: 14px; line-height: 1.6; margin-top: 20px;">
+            If the button doesn't work, copy and paste this link into your browser:<br/>
+            <a href="${resetUrl}" style="color: #1a237e; word-break: break-all;">${resetUrl}</a>
+          </p>
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
+          <p style="color: #999; font-size: 12px; margin: 0;">
+            © 2026 ACCP Conference. All rights reserved.
+          </p>
+        </div>
+      </div>
+    `,
+  });
+
+  if (error) {
+    console.error("Error sending password reset email:", error);
+    throw error;
+  }
+  console.log(`Password reset email sent to ${email}`);
+}
