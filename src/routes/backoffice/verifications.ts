@@ -3,7 +3,10 @@ import { db } from "../../database/index.js";
 import { users } from "../../database/schema.js";
 import { eq, desc, isNotNull } from "drizzle-orm";
 import z from "zod";
-import { sendVerificationApprovedEmail } from "../../services/emailService.js";
+import {
+  sendVerificationApprovedEmail,
+  sendVerificationRejectedEmail,
+} from "../../services/emailService.js";
 
 const rejectSchema = z.object({
   reason: z.string().min(1, "Reason is required"),
@@ -104,7 +107,12 @@ export default async function (fastify: FastifyInstance) {
         return reply.status(404).send({ error: "User not found" });
       }
 
-      // TODO: Send email notification
+      // Send email notification
+      await sendVerificationRejectedEmail(
+        updatedUser.email,
+        updatedUser.firstName,
+        result.data.reason
+      );
 
       return reply.send({ success: true, user: updatedUser });
     } catch (error) {

@@ -236,6 +236,31 @@ export async function sendVerificationApprovedEmail(
 }
 
 /**
+ * Send rejection email to students
+ * Called after backoffice rejection
+ */
+export async function sendVerificationRejectedEmail(
+  email: string,
+  firstName: string,
+  rejectionReason: string,
+): Promise<void> {
+  const templateUuid = process.env.THAIBULK_TEMPLATE_UUID_REJECTED;
+  if (!templateUuid)
+    throw new Error("Missing THAIBULK_TEMPLATE_UUID_REJECTED in .env");
+
+  await sendEmailViaThaiBulk(
+    email,
+    "Verification Unsuccessful - ACCP Conference 2026",
+    templateUuid,
+    {
+      FIRST_NAME: firstName,
+      REJECTION_REASON: rejectionReason,
+    },
+  );
+}
+
+
+/**
  * Send password reset email
  */
 export async function sendPasswordResetEmail(
