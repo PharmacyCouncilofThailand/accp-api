@@ -64,6 +64,13 @@ export default async function (fastify: FastifyInstance) {
                     return {
                         ...abstract,
                         trackingId: `ACCP2026-${abstract.id}`,
+                        // Presenting author info (from logged-in user)
+                        firstName: user.firstName,
+                        lastName: user.lastName,
+                        email: user.email,
+                        phone: user.phone || null,
+                        country: user.country || null,
+                        affiliation: user.institution || null,
                         coAuthors,
                     };
                 })
