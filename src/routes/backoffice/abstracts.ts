@@ -3,6 +3,11 @@ import { db } from "../../database/index.js";
 import { abstracts, abstractCoAuthors, events, users } from "../../database/schema.js";
 import { abstractListSchema, updateAbstractStatusSchema } from "../../schemas/abstracts.schema.js";
 import { eq, desc, ilike, and, or, count, inArray } from "drizzle-orm";
+import {
+    sendAbstractAcceptedPosterEmail,
+    sendAbstractAcceptedOralEmail,
+    sendAbstractRejectedEmail,
+} from "../../services/emailService.js";
 
 export default async function (fastify: FastifyInstance) {
     // List Abstracts
@@ -222,8 +227,56 @@ export default async function (fastify: FastifyInstance) {
 
             if (!updatedAbstract) return reply.status(404).send({ error: "Abstract not found" });
 
-            // If there's a comment, we might want to store it in reviews or just log it.
-            // For now, minimal implementation just updates status.
+            // Get author information for email (skip if no userId)
+            let author = null;
+            if (updatedAbstract.userId) {
+                const [authorResult] = await db
+                    .select({
+                        firstName: users.firstName,
+                        lastName: users.lastName,
+                        email: users.email,
+                    })
+                    .from(users)
+                    .where(eq(users.id, updatedAbstract.userId))
+                    .limit(1);
+                author = authorResult;
+            }
+
+            // Send email notification based on status
+            if (author) {
+                try {
+                    if (status === "accepted") {
+                        // Check presentationType to determine poster or oral email
+                        if (updatedAbstract.presentationType === "poster") {
+                            await sendAbstractAcceptedPosterEmail(
+                                author.email,
+                                author.firstName,
+                                author.lastName,
+                                updatedAbstract.title
+                            );
+                            fastify.log.info(`Abstract accepted (poster) email sent to ${author.email}`);
+                        } else if (updatedAbstract.presentationType === "oral") {
+                            await sendAbstractAcceptedOralEmail(
+                                author.email,
+                                author.firstName,
+                                author.lastName,
+                                updatedAbstract.title
+                            );
+                            fastify.log.info(`Abstract accepted (oral) email sent to ${author.email}`);
+                        }
+                    } else if (status === "rejected") {
+                        await sendAbstractRejectedEmail(
+                            author.email,
+                            author.firstName,
+                            author.lastName,
+                            updatedAbstract.title
+                        );
+                        fastify.log.info(`Abstract rejected email sent to ${author.email}`);
+                    }
+                } catch (emailError) {
+                    fastify.log.error({ err: emailError }, "Failed to send abstract status email");
+                }
+            }
 
             return reply.send({ abstract: updatedAbstract });
         } catch (error) {
@@ -232,3 +285,4 @@ export default async function (fastify: FastifyInstance) {
         }
     });
 }
+

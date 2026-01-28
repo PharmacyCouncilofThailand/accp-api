@@ -112,6 +112,8 @@ fastify.setErrorHandler((error: FastifyError | ApiError, request, reply) => {
 // ============================================================================
 import { authRoutes } from "./routes/auth/register.js";
 import loginRoutes from "./routes/auth/login.js";
+import forgotPasswordRoutes from "./routes/auth/forgot-password.js";
+import resetPasswordRoutes from "./routes/auth/reset-password.js";
 import { uploadRoutes } from "./routes/upload/index.js";
 import backofficeLoginRoutes from "./routes/backoffice/login.js";
 import backofficeUsersRoutes from "./routes/backoffice/users.js";
@@ -148,6 +150,8 @@ fastify.register(async (authPlugin) => {
 }, { prefix: "/auth" });
 
 fastify.register(authRoutes, { prefix: "/auth" });
+fastify.register(forgotPasswordRoutes, { prefix: "/auth" });
+fastify.register(resetPasswordRoutes, { prefix: "/auth" });
 fastify.register(uploadRoutes, { prefix: "/upload" });
 fastify.register(backofficeLoginRoutes, { prefix: "/backoffice" });
 

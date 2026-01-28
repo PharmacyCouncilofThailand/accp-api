@@ -113,6 +113,20 @@ export const users = pgTable("users", {
 });
 
 // --------------------------------------------------------------------------
+// 2A. PASSWORD RESET TOKENS
+// --------------------------------------------------------------------------
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  token: varchar("token", { length: 255 }).notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// --------------------------------------------------------------------------
 // 2B. BACKOFFICE STAFF
 // --------------------------------------------------------------------------
 export const backofficeUsers = pgTable("backoffice_users", {
@@ -461,6 +475,9 @@ export type NewBackofficeUser = typeof backofficeUsers.$inferInsert;
 
 export type StaffEventAssignment = typeof staffEventAssignments.$inferSelect;
 export type NewStaffEventAssignment = typeof staffEventAssignments.$inferInsert;
+
+export type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
+export type NewPasswordResetToken = typeof passwordResetTokens.$inferInsert;
 
 // --------------------------------------------------------------------------
 // 8. RELATIONS

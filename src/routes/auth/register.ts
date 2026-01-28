@@ -5,7 +5,7 @@ import { users } from "../../database/schema.js";
 import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { uploadToGoogleDrive } from "../../services/googleDrive.js";
-import { sendPendingApprovalEmail } from "../../services/emailService.js";
+import { sendPendingApprovalEmail, sendSignupNotificationEmail } from "../../services/emailService.js";
 
 const roleMapping = {
   thaiStudent: "thstd",
@@ -203,14 +203,24 @@ export async function authRoutes(fastify: FastifyInstance) {
         })
         .returning();
 
-      // 8. Send auto-reply email for students (pending approval)
+      // 8. Send auto-reply email based on role
       if (role === "thstd" || role === "interstd") {
+        // Send pending approval email for students
         try {
           await sendPendingApprovalEmail(email, firstName, lastName);
           fastify.log.info(`Pending approval email sent to ${email}`);
         } catch (emailError) {
           // Log error but don't fail registration
           fastify.log.error({ err: emailError }, "Failed to send pending approval email");
+        }
+      } else if (role === "thpro" || role === "interpro") {
+        // Send signup notification email for professionals (non-students)
+        try {
+          await sendSignupNotificationEmail(email, firstName, lastName);
+          fastify.log.info(`Signup notification email sent to ${email}`);
+        } catch (emailError) {
+          // Log error but don't fail registration
+          fastify.log.error({ err: emailError }, "Failed to send signup notification email");
         }
       }
 
