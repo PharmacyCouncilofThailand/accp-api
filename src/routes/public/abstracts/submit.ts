@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { abstractSubmissionSchema } from "../../../schemas/abstracts.schema.js";
 import { db } from "../../../database/index.js";
 import { abstracts, abstractCoAuthors, users } from "../../../database/schema.js";
-import { uploadToGoogleDrive } from "../../../services/googleDrive.js";
+import { uploadToGoogleDrive, getCategoryFolderName, getPresentationTypeFolderName, AbstractCategory, PresentationType } from "../../../services/googleDrive.js";
 import { eq } from "drizzle-orm";
 
 // Allowed file types for abstract documents
@@ -29,7 +29,7 @@ function countWords(text: string): number {
 function validateWordCount(background: string, methods: string, results: string, conclusion: string): { valid: boolean; count: number } {
   const totalText = [background, methods, results, conclusion].join(' ');
   const wordCount = countWords(totalText);
-  
+
   // Word count should be between 250-300 words
   return {
     valid: wordCount >= 250 && wordCount <= 300,
@@ -154,13 +154,18 @@ export default async function (fastify: FastifyInstance) {
       }
 
       // Upload file to Google Drive (BLOCKING - Keep this to ensure file safety)
+      // Files are organized into: ABSTRACT/{Presentation Type}/{Category}
       let fullPaperUrl: string;
       try {
+        const presentationFolderName = getPresentationTypeFolderName(presentationType as PresentationType);
+        const categoryFolderName = getCategoryFolderName(category as AbstractCategory);
         fullPaperUrl = await uploadToGoogleDrive(
           fileBuffer,
           fileName,
           mimeType,
-          "abstracts"
+          "abstracts",
+          presentationFolderName,  // First subfolder: "Poster presentation" or "Oral presentation"
+          categoryFolderName       // Nested subfolder: "1. Clinical Pharmacy", etc.
         );
       } catch (error) {
         fastify.log.error({ err: error }, "Google Drive upload failed");
@@ -226,7 +231,7 @@ export default async function (fastify: FastifyInstance) {
       const runEmailTasksInBackground = async () => {
         try {
           const { sendAbstractSubmissionEmail, sendCoAuthorNotificationEmail } = await import("../../../services/emailService.js");
-          
+
           // 1. Send to Main Author
           await sendAbstractSubmissionEmail(
             email,
@@ -235,15 +240,15 @@ export default async function (fastify: FastifyInstance) {
             newAbstract.id,
             title
           );
-          
+
           fastify.log.info(`Background: Abstract submission email sent to ${email}`);
 
           // 2. Send to Co-authors (with delay to prevent Rate Limit)
           if (coAuthors && coAuthors.length > 0) {
             const mainAuthorName = `${firstName} ${lastName}`;
-            
+
             for (const coAuthor of coAuthors) {
-              await delay(800); 
+              await delay(800);
 
               try {
                 await sendCoAuthorNotificationEmail(

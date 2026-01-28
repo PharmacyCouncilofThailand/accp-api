@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { ticketTypes, events, staffEventAssignments } from "../../database/schema.js";
+import { ticketTypes, events, staffEventAssignments, ticketSessions } from "../../database/schema.js";
 import { eq, desc, ilike, and, count, inArray } from "drizzle-orm";
 import { z } from "zod";
 
@@ -96,8 +96,21 @@ export default async function (fastify: FastifyInstance) {
                 .limit(limit)
                 .offset(offset);
 
+            // Fetch linked sessions for each ticket
+            const ticketsWithSessions = await Promise.all(tickets.map(async (ticket) => {
+                const linkedSessions = await db
+                    .select({ sessionId: ticketSessions.sessionId })
+                    .from(ticketSessions)
+                    .where(eq(ticketSessions.ticketTypeId, ticket.id));
+
+                return {
+                    ...ticket,
+                    sessionIds: linkedSessions.map(ls => ls.sessionId)
+                };
+            }));
+
             return reply.send({
-                tickets,
+                tickets: ticketsWithSessions,
                 pagination: {
                     page,
                     limit,

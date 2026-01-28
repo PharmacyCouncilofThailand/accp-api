@@ -27,6 +27,7 @@ export const updateEventSchema = createEventSchema.partial();
 export const createSessionSchema = z.object({
     sessionCode: z.string().min(1).max(50),
     sessionName: z.string().min(1).max(255),
+    sessionType: z.enum(["workshop", "gala_dinner", "lecture", "ceremony", "break", "other"]).optional().default("other"),
     description: z.string().optional(),
     room: z.string().max(100).optional(),
     startTime: z.string().datetime(),
@@ -42,7 +43,8 @@ export const createTicketTypeSchema = z.object({
     category: z.enum(["primary", "addon"]),
     groupName: z.string().max(100).optional(),
     name: z.string().min(1).max(100),
-    sessionId: z.number().int().optional(),
+    sessionId: z.number().int().optional(), // Deprecated: use sessionIds
+    sessionIds: z.array(z.number().int()).optional(), // Multi-session linking
     price: z.string(),
     currency: z.string().max(3).default("THB"),
     allowedRoles: z.string().optional(),

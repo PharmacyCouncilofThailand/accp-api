@@ -75,6 +75,7 @@ export default async function (fastify: FastifyInstance) {
                     eventId: sessions.eventId,
                     sessionCode: sessions.sessionCode,
                     sessionName: sessions.sessionName,
+                    sessionType: sessions.sessionType,
                     description: sessions.description,
                     startTime: sessions.startTime,
                     endTime: sessions.endTime,

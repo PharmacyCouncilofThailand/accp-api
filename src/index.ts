@@ -19,11 +19,11 @@ const fastify = Fastify({ logger: true });
 // ============================================================================
 // CORS Configuration
 // ============================================================================
-const corsOrigins = process.env.CORS_ORIGIN 
+const corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
   : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001'];
 
-fastify.register(cors, { 
+fastify.register(cors, {
   origin: corsOrigins,
   allowedHeaders: ['Content-Type', 'Authorization', 'x-user-email'],
   exposedHeaders: ['x-user-email'],
@@ -131,6 +131,8 @@ import publicEventsRoutes from "./routes/public/events.js";
 import abstractSubmitRoutes from "./routes/public/abstracts/submit.js";
 import userProfileRoutes from "./routes/public/users/profile.js";
 import userAbstractsRoutes from "./routes/public/abstracts/user.js";
+import publicWorkshopsRoutes from "./routes/public/workshops.js";
+import publicTicketsRoutes from "./routes/public/tickets.js";
 
 // ============================================================================
 // Public Routes (No Auth Required)
@@ -159,6 +161,8 @@ fastify.register(publicSpeakersRoutes, { prefix: "/api/speakers" });
 fastify.register(abstractSubmitRoutes, { prefix: "/api/abstracts" });
 fastify.register(userProfileRoutes, { prefix: "/api/users" });
 fastify.register(userAbstractsRoutes, { prefix: "/api/abstracts/user" });
+fastify.register(publicWorkshopsRoutes, { prefix: "/api/workshops" });
+fastify.register(publicTicketsRoutes, { prefix: "/api/tickets" });
 
 // ============================================================================
 // Protected Backoffice Routes (Auth Required)

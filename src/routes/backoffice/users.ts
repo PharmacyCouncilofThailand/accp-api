@@ -26,6 +26,7 @@ export default async function (fastify: FastifyInstance) {
           lastName: backofficeUsers.lastName,
           role: backofficeUsers.role,
           isActive: backofficeUsers.isActive,
+          assignedCategories: backofficeUsers.assignedCategories,
           createdAt: backofficeUsers.createdAt,
         })
         .from(backofficeUsers)
@@ -65,7 +66,7 @@ export default async function (fastify: FastifyInstance) {
         .send({ error: "Invalid input", details: result.error.flatten() });
     }
 
-    const { email, password, firstName, lastName, role } = result.data;
+    const { email, password, firstName, lastName, role, assignedCategories } = result.data;
 
     try {
       const existingUser = await db
@@ -88,6 +89,7 @@ export default async function (fastify: FastifyInstance) {
           lastName,
           role,
           isActive: true,
+          assignedCategories: assignedCategories || [],
         })
         .returning();
 
@@ -109,7 +111,7 @@ export default async function (fastify: FastifyInstance) {
     }
 
     const updates: Record<string, unknown> = { ...result.data };
-    
+
     // Check email uniqueness if email is being updated
     if (updates.email) {
       const existingUser = await db
