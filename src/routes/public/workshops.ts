@@ -78,6 +78,7 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                         ticketTypeId: ticketTypes.id,
                         price: ticketTypes.price,
                         saleStartDate: ticketTypes.saleStartDate,
+                        currency: ticketTypes.currency,
                     })
                     .from(ticketTypes)
                     .where(inArray(ticketTypes.sessionId, sessionIds))
