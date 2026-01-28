@@ -36,6 +36,20 @@
       "when": 1768362018181,
       "tag": "0004_slimy_mister_fear",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1769505230927,
+      "tag": "0005_easy_nocturne",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1769588711578,
+      "tag": "0006_secret_nightshade",
+      "breakpoints": true
     }
   ]
 }

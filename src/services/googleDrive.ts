@@ -43,6 +43,15 @@ export type AbstractCategory =
   | "pharmacy_education"
   | "digital_pharmacy";
 
+// Presentation type (matches database enum)
+export type PresentationType = "oral" | "poster";
+
+// Map presentation type to human-readable folder name
+const PRESENTATION_TYPE_FOLDER_NAMES: Record<PresentationType, string> = {
+  poster: "Poster presentation",
+  oral: "Oral presentation",
+};
+
 // Map category to human-readable folder name
 const CATEGORY_FOLDER_NAMES: Record<AbstractCategory, string> = {
   clinical_pharmacy: "1. Clinical Pharmacy",
@@ -102,13 +111,15 @@ async function getOrCreateFolder(parentFolderId: string, folderName: string): Pr
  * Upload a file to Google Drive and return shareable link
  * @param folderType - Which folder to upload to (student_docs or abstracts)
  * @param subfolder - Optional subfolder path (e.g., category name for abstracts)
+ * @param nestedSubfolder - Optional nested subfolder inside subfolder (for abstracts: presentationType/category)
  */
 export async function uploadToGoogleDrive(
   fileBuffer: Buffer,
   fileName: string,
   mimeType: string,
   folderType: UploadFolderType = "student_docs",
-  subfolder?: string
+  subfolder?: string,
+  nestedSubfolder?: string
 ): Promise<string> {
   const drive = getDriveClient();
 
@@ -119,9 +130,14 @@ export async function uploadToGoogleDrive(
     throw new Error(`${envKey} environment variable not set`);
   }
 
-  // If subfolder is specified, get or create it
+  // If subfolder is specified, get or create it (e.g., "Poster presentation")
   if (subfolder) {
     folderId = await getOrCreateFolder(folderId, subfolder);
+  }
+
+  // If nested subfolder is specified, get or create it inside subfolder (e.g., "1. Clinical Pharmacy")
+  if (nestedSubfolder) {
+    folderId = await getOrCreateFolder(folderId, nestedSubfolder);
   }
 
   // Generate unique filename with timestamp
@@ -156,9 +172,18 @@ export async function uploadToGoogleDrive(
     },
   });
 
-  // Return the thumbnail link (reliable for <img> tags)
-  // sz=w1000 requests a large thumbnail (width 1000px)
-  return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`;
+  // Return appropriate URL based on file type
+  // For images: use thumbnail URL (reliable for <img> tags)
+  // For PDFs/documents: use the actual file view link
+  const isImage = mimeType.startsWith("image/");
+
+  if (isImage) {
+    // sz=w1000 requests a large thumbnail (width 1000px)
+    return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`;
+  } else {
+    // For PDFs and other documents, return the view link
+    return `https://drive.google.com/file/d/${fileId}/view`;
+  }
 }
 
 /**
@@ -166,6 +191,13 @@ export async function uploadToGoogleDrive(
  */
 export function getCategoryFolderName(category: AbstractCategory): string {
   return CATEGORY_FOLDER_NAMES[category] || category;
+}
+
+/**
+ * Get folder name for presentation type
+ */
+export function getPresentationTypeFolderName(presentationType: PresentationType): string {
+  return PRESENTATION_TYPE_FOLDER_NAMES[presentationType] || presentationType;
 }
 
 /**

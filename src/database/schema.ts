@@ -81,6 +81,14 @@ export const staffRoleEnum = pgEnum("staff_role", [
   "staff",
   "verifier",
 ]);
+export const sessionTypeEnum = pgEnum("session_type", [
+  "workshop",
+  "gala_dinner",
+  "lecture",
+  "ceremony",
+  "break",
+  "other",
+]);
 
 // --------------------------------------------------------------------------
 // 2. USER MANAGEMENT
@@ -115,6 +123,8 @@ export const backofficeUsers = pgTable("backoffice_users", {
   firstName: varchar("first_name", { length: 100 }).notNull(),
   lastName: varchar("last_name", { length: 100 }).notNull(),
   conferenceCode: varchar("conference_code", { length: 100 }),
+  // Categories that this reviewer is responsible for (only applicable for role = 'reviewer')
+  assignedCategories: jsonb("assigned_categories").$type<string[]>().default([]),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -153,6 +163,7 @@ export const sessions = pgTable("sessions", {
     .references(() => events.id),
   sessionCode: varchar("session_code", { length: 50 }).notNull(),
   sessionName: varchar("session_name", { length: 255 }).notNull(),
+  sessionType: sessionTypeEnum("session_type").default("other"),
   description: text("description"),
   room: varchar("room", { length: 100 }),
   startTime: timestamp("start_time").notNull(),
@@ -213,7 +224,7 @@ export const ticketTypes = pgTable("ticket_types", {
   category: ticketCategoryEnum("category").notNull(),
   groupName: varchar("group_name", { length: 100 }),
   name: varchar("name", { length: 100 }).notNull(),
-  sessionId: integer("session_id").references(() => sessions.id),
+  sessionId: integer("session_id").references(() => sessions.id), // Deprecated: use ticketSessions for multi-session
   price: decimal("price", { precision: 10, scale: 2 }).notNull(),
   currency: varchar("currency", { length: 3 }).notNull().default("THB"),
   allowedRoles: text("allowed_roles"),
@@ -221,6 +232,17 @@ export const ticketTypes = pgTable("ticket_types", {
   soldCount: integer("sold_count").notNull().default(0),
   saleStartDate: timestamp("sale_start_date"),
   saleEndDate: timestamp("sale_end_date"),
+});
+
+// Junction table for many-to-many: Ticket <-> Sessions
+export const ticketSessions = pgTable("ticket_sessions", {
+  id: serial("id").primaryKey(),
+  ticketTypeId: integer("ticket_type_id")
+    .notNull()
+    .references(() => ticketTypes.id, { onDelete: "cascade" }),
+  sessionId: integer("session_id")
+    .notNull()
+    .references(() => sessions.id, { onDelete: "cascade" }),
 });
 
 export const promoCodes = pgTable("promo_codes", {
@@ -445,35 +467,35 @@ export type NewStaffEventAssignment = typeof staffEventAssignments.$inferInsert;
 // --------------------------------------------------------------------------
 
 export const registrationsRelations = relations(registrations, ({ one }) => ({
-	event: one(events, {
-		fields: [registrations.eventId],
-		references: [events.id],
-	}),
-	ticketType: one(ticketTypes, {
-		fields: [registrations.ticketTypeId],
-		references: [ticketTypes.id],
-	}),
-	user: one(users, {
-		fields: [registrations.userId],
-		references: [users.id],
-	}),
+  event: one(events, {
+    fields: [registrations.eventId],
+    references: [events.id],
+  }),
+  ticketType: one(ticketTypes, {
+    fields: [registrations.ticketTypeId],
+    references: [ticketTypes.id],
+  }),
+  user: one(users, {
+    fields: [registrations.userId],
+    references: [users.id],
+  }),
 }));
 
 export const checkInsRelations = relations(checkIns, ({ one }) => ({
-	registration: one(registrations, {
-		fields: [checkIns.registrationId],
-		references: [registrations.id],
-	}),
-	scannedBy: one(users, {
-		fields: [checkIns.scannedBy],
-		references: [users.id],
-	}),
+  registration: one(registrations, {
+    fields: [checkIns.registrationId],
+    references: [registrations.id],
+  }),
+  scannedBy: one(users, {
+    fields: [checkIns.scannedBy],
+    references: [users.id],
+  }),
 }));
 
 export const eventsRelations = relations(events, ({ many }) => ({
-	registrations: many(registrations),
+  registrations: many(registrations),
 }));
 
 export const ticketTypesRelations = relations(ticketTypes, ({ many }) => ({
-	registrations: many(registrations),
+  registrations: many(registrations),
 }));

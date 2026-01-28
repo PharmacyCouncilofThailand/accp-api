@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { abstractSubmissionSchema } from "../../../schemas/abstracts.schema.js";
 import { db } from "../../../database/index.js";
 import { abstracts, abstractCoAuthors, users } from "../../../database/schema.js";
-import { uploadToGoogleDrive, getCategoryFolderName, AbstractCategory } from "../../../services/googleDrive.js";
+import { uploadToGoogleDrive, getCategoryFolderName, getPresentationTypeFolderName, AbstractCategory, PresentationType } from "../../../services/googleDrive.js";
 import { eq } from "drizzle-orm";
 
 // Allowed file types for abstract documents
@@ -14,7 +14,7 @@ const ALLOWED_MIME_TYPES = [
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 // Default event ID for ACCP 2026 (adjust this based on your actual event ID)
-const DEFAULT_EVENT_ID = 3;
+const DEFAULT_EVENT_ID = 1;
 
 /**
  * Helper function to count words in text
@@ -154,16 +154,18 @@ export default async function (fastify: FastifyInstance) {
       }
 
       // Upload file to Google Drive (BLOCKING - Keep this to ensure file safety)
-      // Files are organized into category subfolders
+      // Files are organized into: ABSTRACT/{Presentation Type}/{Category}
       let fullPaperUrl: string;
       try {
+        const presentationFolderName = getPresentationTypeFolderName(presentationType as PresentationType);
         const categoryFolderName = getCategoryFolderName(category as AbstractCategory);
         fullPaperUrl = await uploadToGoogleDrive(
           fileBuffer,
           fileName,
           mimeType,
           "abstracts",
-          categoryFolderName // Upload to category subfolder
+          presentationFolderName,  // First subfolder: "Poster presentation" or "Oral presentation"
+          categoryFolderName       // Nested subfolder: "1. Clinical Pharmacy", etc.
         );
       } catch (error) {
         fastify.log.error({ err: error }, "Google Drive upload failed");

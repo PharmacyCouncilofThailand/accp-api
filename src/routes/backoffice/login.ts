@@ -20,7 +20,7 @@ export default async function (fastify: FastifyInstance) {
         validation: result.error.flatten(),
         ip: request.ip,
       }, "Validation failed");
-      
+
       return reply.status(400).send({
         success: false,
         code: "VALIDATION_ERROR",
@@ -87,12 +87,13 @@ export default async function (fastify: FastifyInstance) {
         }));
       }
 
-      // 6. Sign JWT
+      // 6. Sign JWT (include assignedCategories for reviewers)
       const token = fastify.jwt.sign(
         {
           id: staff.id,
           email: staff.email,
           role: staff.role,
+          assignedCategories: staff.assignedCategories || [],
         },
         { expiresIn: "7d" }
       );
@@ -108,6 +109,7 @@ export default async function (fastify: FastifyInstance) {
           lastName: staff.lastName,
           role: staff.role,
           assignedEvents,
+          assignedCategories: staff.assignedCategories || [],
         },
       });
     } catch (error) {

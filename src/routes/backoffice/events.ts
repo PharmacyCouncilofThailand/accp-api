@@ -4,8 +4,10 @@ import {
     events,
     sessions,
     ticketTypes,
+    ticketSessions,
     eventImages,
     staffEventAssignments,
+    registrations,
 } from "../../database/schema.js";
 import {
     createEventSchema,
@@ -370,6 +372,7 @@ export default async function (fastify: FastifyInstance) {
                     eventId: parseInt(eventId),
                     sessionCode: data.sessionCode,
                     sessionName: data.sessionName,
+                    sessionType: data.sessionType,
                     description: data.description,
                     room: data.room,
                     startTime: new Date(data.startTime),
@@ -441,6 +444,52 @@ export default async function (fastify: FastifyInstance) {
         }
     });
 
+    // Get Session Enrollments (people registered for this session)
+    fastify.get("/:eventId/sessions/:sessionId/enrollments", async (request, reply) => {
+        const { sessionId } = request.params as { eventId: string; sessionId: string };
+
+        try {
+            // Get all ticket types for this session
+            const sessionTicketTypes = await db
+                .select({ id: ticketTypes.id })
+                .from(ticketTypes)
+                .where(eq(ticketTypes.sessionId, parseInt(sessionId)));
+
+            if (sessionTicketTypes.length === 0) {
+                // No ticket types for this session, return empty list
+                return reply.send({ enrollments: [], count: 0 });
+            }
+
+            const ticketTypeIds = sessionTicketTypes.map(t => t.id);
+
+            // Get all registrations for these ticket types
+            const enrollmentList = await db
+                .select({
+                    id: registrations.id,
+                    regCode: registrations.regCode,
+                    email: registrations.email,
+                    firstName: registrations.firstName,
+                    lastName: registrations.lastName,
+                    status: registrations.status,
+                    createdAt: registrations.createdAt,
+                    ticketTypeId: registrations.ticketTypeId,
+                    ticketName: ticketTypes.name,
+                })
+                .from(registrations)
+                .leftJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
+                .where(inArray(registrations.ticketTypeId, ticketTypeIds))
+                .orderBy(desc(registrations.createdAt));
+
+            return reply.send({
+                enrollments: enrollmentList,
+                count: enrollmentList.length
+            });
+        } catch (error) {
+            fastify.log.error(error);
+            return reply.status(500).send({ error: "Failed to fetch session enrollments" });
+        }
+    });
+
     // ============================================================================
     // TICKET TYPES CRUD (nested under events)
     // ============================================================================
@@ -455,7 +504,20 @@ export default async function (fastify: FastifyInstance) {
                 .from(ticketTypes)
                 .where(eq(ticketTypes.eventId, parseInt(eventId)));
 
-            return reply.send({ tickets: ticketList });
+            // Fetch linked sessions for each ticket
+            const ticketsWithSessions = await Promise.all(ticketList.map(async (ticket) => {
+                const linkedSessions = await db
+                    .select({ sessionId: ticketSessions.sessionId })
+                    .from(ticketSessions)
+                    .where(eq(ticketSessions.ticketTypeId, ticket.id));
+
+                return {
+                    ...ticket,
+                    sessionIds: linkedSessions.map(ls => ls.sessionId)
+                };
+            }));
+
+            return reply.send({ tickets: ticketsWithSessions });
         } catch (error) {
             fastify.log.error(error);
             return reply.status(500).send({ error: "Failed to fetch tickets" });
@@ -486,22 +548,42 @@ export default async function (fastify: FastifyInstance) {
                 return reply.status(404).send({ error: "Event not found" });
             }
 
-            const [newTicket] = await db
-                .insert(ticketTypes)
-                .values({
-                    eventId: parseInt(eventId),
-                    category: data.category,
-                    groupName: data.groupName,
-                    name: data.name,
-                    sessionId: data.sessionId,
-                    price: data.price,
-                    currency: data.currency,
-                    allowedRoles: data.allowedRoles,
-                    quota: data.quota,
-                    saleStartDate: data.saleStartDate ? new Date(data.saleStartDate) : null,
-                    saleEndDate: data.saleEndDate ? new Date(data.saleEndDate) : null,
-                })
-                .returning();
+            // Start transaction
+            const newTicket = await db.transaction(async (tx) => {
+                const [ticket] = await tx
+                    .insert(ticketTypes)
+                    .values({
+                        eventId: parseInt(eventId),
+                        category: data.category,
+                        groupName: data.groupName,
+                        name: data.name,
+                        sessionId: data.sessionId, // Keep for backward compat
+                        price: data.price,
+                        currency: data.currency,
+                        allowedRoles: data.allowedRoles,
+                        quota: data.quota,
+                        saleStartDate: data.saleStartDate ? new Date(data.saleStartDate) : null,
+                        saleEndDate: data.saleEndDate ? new Date(data.saleEndDate) : null,
+                    })
+                    .returning();
+
+                // Handle session linking
+                const sessionsToLink = data.sessionIds || (data.sessionId ? [data.sessionId] : []);
+
+                if (sessionsToLink.length > 0) {
+                    await tx.insert(ticketSessions).values(
+                        sessionsToLink.map(sid => ({
+                            ticketTypeId: ticket.id,
+                            sessionId: sid
+                        }))
+                    );
+                }
+
+                return {
+                    ...ticket,
+                    sessionIds: sessionsToLink
+                };
+            });
 
             return reply.status(201).send({ ticket: newTicket });
         } catch (error) {
@@ -527,11 +609,51 @@ export default async function (fastify: FastifyInstance) {
         if (data.saleEndDate) updates.saleEndDate = new Date(data.saleEndDate);
 
         try {
-            const [updatedTicket] = await db
-                .update(ticketTypes)
-                .set(updates)
-                .where(eq(ticketTypes.id, parseInt(ticketId)))
-                .returning();
+            const updatedTicket = await db.transaction(async (tx) => {
+                const [ticket] = await tx
+                    .update(ticketTypes)
+                    .set(updates)
+                    .where(eq(ticketTypes.id, parseInt(ticketId)))
+                    .returning();
+
+                if (!ticket) return null;
+
+                // Handle session linking update if provided
+                if (data.sessionIds !== undefined) {
+                    // Delete existing links
+                    await tx.delete(ticketSessions).where(eq(ticketSessions.ticketTypeId, ticket.id));
+
+                    // Add new links
+                    if (data.sessionIds && data.sessionIds.length > 0) {
+                        await tx.insert(ticketSessions).values(
+                            data.sessionIds.map(sid => ({
+                                ticketTypeId: ticket.id,
+                                sessionId: sid
+                            }))
+                        );
+                    }
+                } else if (data.sessionId !== undefined) {
+                    // Backward compatibility: if only sessionId is provided
+                    await tx.delete(ticketSessions).where(eq(ticketSessions.ticketTypeId, ticket.id));
+                    if (data.sessionId) {
+                        await tx.insert(ticketSessions).values({
+                            ticketTypeId: ticket.id,
+                            sessionId: data.sessionId
+                        });
+                    }
+                }
+
+                // Get current linked sessions
+                const linkedSessions = await tx
+                    .select({ sessionId: ticketSessions.sessionId })
+                    .from(ticketSessions)
+                    .where(eq(ticketSessions.ticketTypeId, ticket.id));
+
+                return {
+                    ...ticket,
+                    sessionIds: linkedSessions.map(ls => ls.sessionId)
+                };
+            });
 
             if (!updatedTicket) {
                 return reply.status(404).send({ error: "Ticket not found" });
