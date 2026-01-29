@@ -61,9 +61,11 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     .select({
                         sessionId: ticketSessions.sessionId,
                         ticketTypeId: ticketTypes.id,
+                        name: ticketTypes.name,
                         price: ticketTypes.price,
                         saleStartDate: ticketTypes.saleStartDate,
                         currency: ticketTypes.currency,
+                        allowedRoles: ticketTypes.allowedRoles
                     })
                     .from(ticketSessions)
                     .innerJoin(ticketTypes, eq(ticketSessions.ticketTypeId, ticketTypes.id))
@@ -76,8 +78,11 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     .select({
                         sessionId: ticketTypes.sessionId,
                         ticketTypeId: ticketTypes.id,
+                        name: ticketTypes.name,
                         price: ticketTypes.price,
                         saleStartDate: ticketTypes.saleStartDate,
+                        currency: ticketTypes.currency,
+                        allowedRoles: ticketTypes.allowedRoles
                     })
                     .from(ticketTypes)
                     .where(inArray(ticketTypes.sessionId, sessionIds))
@@ -113,19 +118,20 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
 
             // Build enrollment map: sessionId -> count
             const enrollmentMap = new Map<number, number>();
-            const priceMap = new Map<number, string>();
-            const currencyMap = new Map<number, string>();
             const saleDateMap = new Map<number, Date | null>();
+            const sessionTicketsMap = new Map<number, typeof sessionTicketTypes>();
+
 
             for (const tt of sessionTicketTypes) {
                 if (tt.sessionId) {
                     const regCount = registrationCounts.find(r => r.ticketTypeId === tt.ticketTypeId);
                     const currentCount = enrollmentMap.get(tt.sessionId) || 0;
                     enrollmentMap.set(tt.sessionId, currentCount + (regCount?.count || 0));
-                    if (!priceMap.has(tt.sessionId)) {
-                        priceMap.set(tt.sessionId, tt.price);
-                        currencyMap.set(tt.sessionId, tt.currency);
-                    }
+
+                    // Collect tickets for this session
+                    const tickets = sessionTicketsMap.get(tt.sessionId) || [];
+                    tickets.push(tt);
+                    sessionTicketsMap.set(tt.sessionId, tickets);
 
                     // Track earliest sale start date
                     if (tt.saleStartDate) {
@@ -142,8 +148,20 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
             const workshops = workshopSessions.map((session, index) => {
                 const event = workshopEvents.find(e => e.id === session.eventId);
                 const enrolledCount = enrollmentMap.get(session.id) || 0;
-                const price = priceMap.get(session.id);
-                const currency = currencyMap.get(session.id) || 'THB';
+
+                // Get all tickets for this session
+                const sessionTickets = sessionTicketsMap.get(session.id) || [];
+
+                // Format tickets for frontend
+                const availableTickets = sessionTickets.map(t => ({
+                    id: t.ticketTypeId,
+                    name: t.name,
+                    price: t.price,
+                    currency: t.currency,
+                    allowedRoles: t.allowedRoles ? JSON.parse(t.allowedRoles as string) : null,
+                    saleStartDate: t.saleStartDate
+                }));
+
                 const isFull = session.maxCapacity ? enrolledCount >= session.maxCapacity : false;
                 const saleStartDate = saleDateMap.get(session.id); // Get earliest sale date
 
@@ -189,7 +207,11 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     venue: session.room || event?.location || '',
                     capacity: session.maxCapacity || 0,
                     enrolled: enrolledCount,
-                    fee: price ? `${currency} ${parseFloat(price).toLocaleString()}` : 'Free',
+                    // fee property is deprecated but kept for backward compatibility if needed, though frontend should use tickets
+                    fee: availableTickets.length > 0
+                        ? `${availableTickets[0].currency} ${parseFloat(availableTickets[0].price).toLocaleString()}`
+                        : 'Free',
+                    tickets: availableTickets,
                     instructors: speakersArray,
                     color: colors[index % colors.length],
                     icon: icons[index % icons.length],
