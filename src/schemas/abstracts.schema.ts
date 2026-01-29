@@ -46,6 +46,7 @@ export const abstractListSchema = z.object({
     eventId: z.coerce.number().optional(),
     status: z.enum(['pending', 'accepted', 'rejected']).optional(),
     category: z.enum(['clinical_pharmacy', 'social_administrative', 'pharmaceutical_sciences', 'pharmacology_toxicology', 'pharmacy_education', 'digital_pharmacy']).optional(),
+    presentationType: z.enum(['oral', 'poster']).optional(),
 });
 
 // Backoffice: Update abstract status
