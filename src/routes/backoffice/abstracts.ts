@@ -17,7 +17,7 @@ export default async function (fastify: FastifyInstance) {
             return reply.status(400).send({ error: "Invalid query", details: queryResult.error.flatten() });
         }
 
-        const { page, limit, search, eventId, status, category } = queryResult.data;
+        const { page, limit, search, eventId, status, category, presentationType } = queryResult.data;
         const offset = (page - 1) * limit;
 
         // Get user info from JWT
@@ -62,6 +62,7 @@ export default async function (fastify: FastifyInstance) {
             if (eventId) conditions.push(eq(abstracts.eventId, eventId));
             if (status) conditions.push(eq(abstracts.status, status));
             if (category) conditions.push(eq(abstracts.category, category));
+            if (presentationType) conditions.push(eq(abstracts.presentationType, presentationType));
             if (search) {
                 conditions.push(
                     or(
