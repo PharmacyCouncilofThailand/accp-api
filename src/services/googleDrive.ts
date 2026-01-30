@@ -62,6 +62,41 @@ const CATEGORY_FOLDER_NAMES: Record<AbstractCategory, string> = {
   digital_pharmacy: "6. Digital Pharmacy and Innovation",
 };
 
+// Direct subfolder ENV mapping for faster uploads (bypasses folder lookup)
+// Format: GOOGLE_DRIVE_FOLDER_{PRESENTATION_TYPE}_{CATEGORY}
+const DIRECT_SUBFOLDER_ENV_MAP: Record<PresentationType, Record<AbstractCategory, string>> = {
+  poster: {
+    clinical_pharmacy: "GOOGLE_DRIVE_FOLDER_POSTER_CLINICAL_PHARMACY",
+    social_administrative: "GOOGLE_DRIVE_FOLDER_POSTER_SOCIAL_ADMINISTRATIVE",
+    pharmaceutical_sciences: "GOOGLE_DRIVE_FOLDER_POSTER_PHARMACEUTICAL_SCIENCES",
+    pharmacology_toxicology: "GOOGLE_DRIVE_FOLDER_POSTER_PHARMACOLOGY_TOXICOLOGY",
+    pharmacy_education: "GOOGLE_DRIVE_FOLDER_POSTER_PHARMACY_EDUCATION",
+    digital_pharmacy: "GOOGLE_DRIVE_FOLDER_POSTER_DIGITAL_PHARMACY",
+  },
+  oral: {
+    clinical_pharmacy: "GOOGLE_DRIVE_FOLDER_ORAL_CLINICAL_PHARMACY",
+    social_administrative: "GOOGLE_DRIVE_FOLDER_ORAL_SOCIAL_ADMINISTRATIVE",
+    pharmaceutical_sciences: "GOOGLE_DRIVE_FOLDER_ORAL_PHARMACEUTICAL_SCIENCES",
+    pharmacology_toxicology: "GOOGLE_DRIVE_FOLDER_ORAL_PHARMACOLOGY_TOXICOLOGY",
+    pharmacy_education: "GOOGLE_DRIVE_FOLDER_ORAL_PHARMACY_EDUCATION",
+    digital_pharmacy: "GOOGLE_DRIVE_FOLDER_ORAL_DIGITAL_PHARMACY",
+  },
+};
+
+/**
+ * Get direct subfolder ID from ENV if available
+ * Returns null if ENV not set (will fallback to folder lookup)
+ */
+export function getDirectSubfolderFromEnv(
+  presentationType: PresentationType,
+  category: AbstractCategory
+): string | null {
+  const envKey = DIRECT_SUBFOLDER_ENV_MAP[presentationType]?.[category];
+  if (!envKey) return null;
+  const folderId = process.env[envKey];
+  return folderId && folderId.trim() !== "" ? folderId : null;
+}
+
 // Cache for subfolder IDs to avoid repeated API calls
 const subfolderCache: Record<string, string> = {};
 
@@ -110,8 +145,10 @@ async function getOrCreateFolder(parentFolderId: string, folderName: string): Pr
 /**
  * Upload a file to Google Drive and return shareable link
  * @param folderType - Which folder to upload to (student_docs or abstracts)
- * @param subfolder - Optional subfolder path (e.g., category name for abstracts)
- * @param nestedSubfolder - Optional nested subfolder inside subfolder (for abstracts: presentationType/category)
+ * @param subfolder - Optional subfolder path (e.g., "Poster presentation" for abstracts)
+ * @param nestedSubfolder - Optional nested subfolder inside subfolder (e.g., "1. Clinical Pharmacy")
+ * @param presentationType - Optional presentation type for direct ENV lookup (faster)
+ * @param category - Optional category for direct ENV lookup (faster)
  */
 export async function uploadToGoogleDrive(
   fileBuffer: Buffer,
@@ -119,7 +156,9 @@ export async function uploadToGoogleDrive(
   mimeType: string,
   folderType: UploadFolderType = "student_docs",
   subfolder?: string,
-  nestedSubfolder?: string
+  nestedSubfolder?: string,
+  presentationType?: PresentationType,
+  category?: AbstractCategory
 ): Promise<string> {
   const drive = getDriveClient();
 
@@ -130,14 +169,29 @@ export async function uploadToGoogleDrive(
     throw new Error(`${envKey} environment variable not set`);
   }
 
-  // If subfolder is specified, get or create it (e.g., "Poster presentation")
-  if (subfolder) {
-    folderId = await getOrCreateFolder(folderId, subfolder);
-  }
-
-  // If nested subfolder is specified, get or create it inside subfolder (e.g., "1. Clinical Pharmacy")
-  if (nestedSubfolder) {
-    folderId = await getOrCreateFolder(folderId, nestedSubfolder);
+  // For abstracts: Try to get direct subfolder ID from ENV (faster - skips folder lookup)
+  if (folderType === "abstracts" && presentationType && category) {
+    const directFolderId = getDirectSubfolderFromEnv(presentationType, category);
+    if (directFolderId) {
+      // Use direct folder ID from ENV (fast path - no API calls)
+      folderId = directFolderId;
+    } else {
+      // Fallback: use folder lookup (slower but automatic)
+      if (subfolder) {
+        folderId = await getOrCreateFolder(folderId, subfolder);
+      }
+      if (nestedSubfolder) {
+        folderId = await getOrCreateFolder(folderId, nestedSubfolder);
+      }
+    }
+  } else {
+    // Non-abstract uploads: use folder lookup as before
+    if (subfolder) {
+      folderId = await getOrCreateFolder(folderId, subfolder);
+    }
+    if (nestedSubfolder) {
+      folderId = await getOrCreateFolder(folderId, nestedSubfolder);
+    }
   }
 
   // Generate unique filename with timestamp
