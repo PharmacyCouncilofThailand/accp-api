@@ -165,7 +165,9 @@ export default async function (fastify: FastifyInstance) {
           mimeType,
           "abstracts",
           presentationFolderName,  // First subfolder: "Poster presentation" or "Oral presentation"
-          categoryFolderName       // Nested subfolder: "1. Clinical Pharmacy", etc.
+          categoryFolderName,      // Nested subfolder: "1. Clinical Pharmacy", etc.
+          presentationType as PresentationType,  // For direct ENV lookup (fast path)
+          category as AbstractCategory           // For direct ENV lookup (fast path)
         );
       } catch (error) {
         fastify.log.error({ err: error }, "Google Drive upload failed");
