@@ -133,6 +133,7 @@ import userProfileRoutes from "./routes/public/users/profile.js";
 import userAbstractsRoutes from "./routes/public/abstracts/user.js";
 import publicWorkshopsRoutes from "./routes/public/workshops.js";
 import publicTicketsRoutes from "./routes/public/tickets.js";
+import publicContactRoutes from "./routes/public/contact.js";
 
 // ============================================================================
 // Public Routes (No Auth Required)
@@ -163,6 +164,7 @@ fastify.register(userProfileRoutes, { prefix: "/api/users" });
 fastify.register(userAbstractsRoutes, { prefix: "/api/abstracts/user" });
 fastify.register(publicWorkshopsRoutes, { prefix: "/api/workshops" });
 fastify.register(publicTicketsRoutes, { prefix: "/api/tickets" });
+fastify.register(publicContactRoutes, { prefix: "/api/contact" });
 
 // ============================================================================
 // Protected Backoffice Routes (Auth Required)

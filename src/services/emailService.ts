@@ -513,3 +513,51 @@ Bangkok Thailand
   }
   console.log(`Password reset email sent to ${email}`);
 }
+
+// ============================================
+// CONTACT FORM EMAIL
+// ============================================
+
+/**
+ * Send contact form email to conference organizers
+ * Email will be sent to accpbangkok2026@gmail.com with Reply-To set to user's email
+ */
+export async function sendContactFormEmail(
+  name: string,
+  email: string,
+  phone: string,
+  subject: string,
+  message: string
+): Promise<void> {
+  const targetEmail = process.env.CONTACT_FORM_EMAIL || "perapong2920@gmail.com";
+
+  const plainText = `
+New Contact Form Submission
+
+From: ${name}
+Email: ${email}
+Phone: ${phone || "Not provided"}
+
+Subject: ${subject}
+
+Message:
+${message}
+
+---
+This message was sent via the ACCP 2026 website contact form.
+  `.trim();
+
+  const { error } = await getResendClient().emails.send({
+    from: getFromEmail(),
+    to: [targetEmail],
+    replyTo: email,
+    subject: `[Contact Form] ${subject}`,
+    text: plainText,
+  });
+
+  if (error) {
+    console.error("Error sending contact form email:", error);
+    throw error;
+  }
+  console.log(`Contact form email sent from ${email} to ${targetEmail}`);
+}
