@@ -11,7 +11,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci --legacy-peer-deps
+RUN npm install --legacy-peer-deps
 
 # Copy source code
 COPY . .
@@ -37,7 +37,7 @@ COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/drizzle ./drizzle
 
 # Install production dependencies only
-RUN npm ci --legacy-peer-deps --omit=dev
+RUN npm install --legacy-peer-deps --omit=dev
 
 # Create non-root user for security
 RUN addgroup --system --gid 1001 nodejs
