@@ -1,12 +1,12 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { sessions, events, staffEventAssignments } from "../../database/schema.js";
+import { sessions, events, staffEventAssignments, speakers, eventSpeakers } from "../../database/schema.js";
 import { eq, desc, ilike, and, count, inArray } from "drizzle-orm";
 import { z } from "zod";
 
 const sessionQuerySchema = z.object({
     page: z.coerce.number().min(1).default(1),
-    limit: z.coerce.number().min(1).max(100).default(20),
+    limit: z.coerce.number().min(1).max(1000).default(20),
     search: z.string().optional(),
     eventId: z.coerce.number().optional(),
 });
@@ -69,7 +69,7 @@ export default async function (fastify: FastifyInstance) {
                 .where(whereClause);
 
             // Fetch data
-            const sessionsList = await db
+            const sessionsWithMeta = await db
                 .select({
                     id: sessions.id,
                     eventId: sessions.eventId,
@@ -80,8 +80,8 @@ export default async function (fastify: FastifyInstance) {
                     startTime: sessions.startTime,
                     endTime: sessions.endTime,
                     room: sessions.room,
-                    speakers: sessions.speakers,
                     maxCapacity: sessions.maxCapacity,
+                    isMainSession: sessions.isMainSession,
                     eventCode: events.eventCode,
                 })
                 .from(sessions)
@@ -91,8 +91,27 @@ export default async function (fastify: FastifyInstance) {
                 .limit(limit)
                 .offset(offset);
 
+            // Fetch speakers for these sessions and aggregate
+            const finalSessions = await Promise.all(sessionsWithMeta.map(async (s) => {
+                const sSpeakers = await db
+                    .select({
+                        id: speakers.id,
+                        firstName: speakers.firstName,
+                        lastName: speakers.lastName,
+                    })
+                    .from(eventSpeakers)
+                    .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
+                    .where(eq(eventSpeakers.sessionId, s.id));
+
+                return {
+                    ...s,
+                    speakers: sSpeakers.map(sp => `${sp.firstName} ${sp.lastName}`),
+                    speakerIds: sSpeakers.map(sp => sp.id)
+                };
+            }));
+
             return reply.send({
-                sessions: sessionsList,
+                sessions: finalSessions,
                 pagination: {
                     page,
                     limit,

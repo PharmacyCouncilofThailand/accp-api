@@ -12,7 +12,7 @@ export const createEventSchema = z.object({
     endDate: z.string().datetime(),
     maxCapacity: z.number().int().positive().default(100),
     conferenceCode: z.string().max(100).optional(),
-    cpeCredits: z.string().optional(),
+    cpeCredits: z.preprocess((val) => val === "" ? undefined : Number(val), z.number().min(0).optional()),
     status: z.enum(["draft", "published", "cancelled", "completed"]).default("draft"),
     imageUrl: z.string().max(500).optional(),
     mapUrl: z.string().max(500).optional(),
@@ -28,11 +28,12 @@ export const createSessionSchema = z.object({
     sessionCode: z.string().min(1).max(50),
     sessionName: z.string().min(1).max(255),
     sessionType: z.enum(["workshop", "gala_dinner", "lecture", "ceremony", "break", "other"]).optional().default("other"),
+    isMainSession: z.boolean().optional().default(false),
     description: z.string().optional(),
     room: z.string().max(100).optional(),
     startTime: z.string().datetime(),
     endTime: z.string().datetime(),
-    speakers: z.string().optional(),
+    speakerIds: z.array(z.number()).optional(), // New way: link to speakers table
     maxCapacity: z.number().int().positive().default(100),
 });
 
@@ -45,7 +46,7 @@ export const createTicketTypeSchema = z.object({
     name: z.string().min(1).max(100),
     sessionId: z.number().int().optional(), // Deprecated: use sessionIds
     sessionIds: z.array(z.number().int()).optional(), // Multi-session linking
-    price: z.string(),
+    price: z.preprocess((val) => typeof val === 'string' && val.trim() === '' ? 0 : Number(val), z.number().min(0)),
     currency: z.string().max(3).default("THB"),
     allowedRoles: z.string().optional(),
     quota: z.number().int().positive(),
@@ -61,7 +62,7 @@ export const eventQuerySchema = z.object({
     eventType: z.enum(["single_room", "multi_session"]).optional(),
     search: z.string().optional(),
     page: z.coerce.number().int().positive().default(1),
-    limit: z.coerce.number().int().positive().max(100).default(20),
+    limit: z.coerce.number().int().positive().max(1000).default(20),
 });
 
 export type CreateEventInput = z.infer<typeof createEventSchema>;
