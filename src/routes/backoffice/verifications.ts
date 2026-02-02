@@ -9,6 +9,10 @@ const rejectSchema = z.object({
   reason: z.string().min(1, "Reason is required"),
 });
 
+const approveSchema = z.object({
+  comment: z.string().optional(),
+});
+
 export default async function (fastify: FastifyInstance) {
   // List all verifications (filtered by having a document URL)
   fastify.get("", async (request, reply) => {
@@ -53,6 +57,8 @@ export default async function (fastify: FastifyInstance) {
   // Approve User
   fastify.post("/:id/approve", async (request, reply) => {
     const { id } = request.params as { id: string };
+    const bodyResult = approveSchema.safeParse(request.body);
+    const comment = bodyResult.success ? bodyResult.data.comment : undefined;
 
     try {
       const [updatedUser] = await db
@@ -68,7 +74,8 @@ export default async function (fastify: FastifyInstance) {
       // Send email notification
       await sendVerificationApprovedEmail(
         updatedUser.email,
-        updatedUser.firstName
+        updatedUser.firstName,
+        comment
       );
 
       return reply.send({ success: true, user: updatedUser });

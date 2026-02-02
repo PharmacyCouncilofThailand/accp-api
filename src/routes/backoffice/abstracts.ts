@@ -253,7 +253,8 @@ export default async function (fastify: FastifyInstance) {
                                 author.email,
                                 author.firstName,
                                 author.lastName,
-                                updatedAbstract.title
+                                updatedAbstract.title,
+                                comment
                             );
                             fastify.log.info(`Abstract accepted (poster) email sent to ${author.email}`);
                         } else if (updatedAbstract.presentationType === "oral") {
@@ -261,7 +262,8 @@ export default async function (fastify: FastifyInstance) {
                                 author.email,
                                 author.firstName,
                                 author.lastName,
-                                updatedAbstract.title
+                                updatedAbstract.title,
+                                comment
                             );
                             fastify.log.info(`Abstract accepted (oral) email sent to ${author.email}`);
                         }
@@ -270,7 +272,8 @@ export default async function (fastify: FastifyInstance) {
                             author.email,
                             author.firstName,
                             author.lastName,
-                            updatedAbstract.title
+                            updatedAbstract.title,
+                            comment
                         );
                         fastify.log.info(`Abstract rejected email sent to ${author.email}`);
                     }

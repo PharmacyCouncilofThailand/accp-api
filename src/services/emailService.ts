@@ -226,16 +226,18 @@ export async function sendAbstractAcceptedPosterEmail(
   email: string,
   firstName: string,
   lastName: string,
-  abstractTitle: string
+  abstractTitle: string,
+  comment?: string
 ): Promise<void> {
   const websiteUrl = getWebsiteUrl();
   const contactEmail = getContactEmail();
+  const commentText = comment ? `\nComment: ${comment}\n` : '';
 
   const plainText = `
 Dear ${firstName} ${lastName},
 
 Congratulations! Your abstract, titled "${abstractTitle}", is ACCEPTED as a POSTER PRESENTATION at the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
-
+${commentText}
 All poster presenters must be registered for the meeting in order to present their poster. For registration information and details go to ${websiteUrl}
 
 We look forward to your presentation. If you have any questions, please contact ${contactEmail}
@@ -262,16 +264,18 @@ export async function sendAbstractAcceptedOralEmail(
   email: string,
   firstName: string,
   lastName: string,
-  abstractTitle: string
+  abstractTitle: string,
+  comment?: string
 ): Promise<void> {
   const websiteUrl = getWebsiteUrl();
   const contactEmail = getContactEmail();
+  const commentText = comment ? `\nComment: ${comment}\n` : '';
 
   const plainText = `
 Dear ${firstName} ${lastName},
 
 Congratulations! Your abstract, titled "${abstractTitle}", is ACCEPTED as an ORAL PRESENTATION at the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
-
+${commentText}
 All oral presenters must be registered for the meeting in order to present. For registration information and details go to ${websiteUrl}
 
 We look forward to your presentation. If you have any questions, please contact ${contactEmail}
@@ -298,15 +302,18 @@ export async function sendAbstractRejectedEmail(
   email: string,
   firstName: string,
   lastName: string,
-  abstractTitle: string
+  abstractTitle: string,
+  comment?: string
 ): Promise<void> {
+  const commentText = comment ? `\nComment: ${comment}\n` : '';
+
   const plainText = `
 Dear ${firstName} ${lastName},
 
 Thank you very much for submitting your abstract for poster or oral presentation at the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. Unfortunately, there are many high-quality abstracts, but we still have limited availability for poster or oral presentations.
 
 Abstract Title: ${abstractTitle}
-
+${commentText}
 Thank you so much again for your submission. Looking forward to your abstract at next year's conference.
 
 Sincerely,
@@ -365,11 +372,13 @@ Bangkok Thailand
  */
 export async function sendVerificationApprovedEmail(
   email: string,
-  firstName: string
+  firstName: string,
+  comment?: string
 ): Promise<void> {
   const loginUrl = process.env.BASE_URL
     ? `${process.env.BASE_URL}/login`
     : "http://localhost:3000/login";
+  const commentText = comment ? `\nComment: ${comment}\n` : '';
 
   const plainText = `
 Dear ${firstName},
@@ -377,7 +386,7 @@ Dear ${firstName},
 Thank you for your registration for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 
 For the student registration fee, we have to check the documents to verify that they are students. Your document has been approved, so your registration has already confirmed.
-
+${commentText}
 See you soon at ACCP 2026, Bangkok, Thailand.
 
 Login to your account: ${loginUrl}
