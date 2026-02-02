@@ -218,7 +218,7 @@ export default async function (fastify: FastifyInstance) {
                     endDate: new Date(new Date(data.endDate).setHours(0, 0, 0, 0)),
                     maxCapacity: data.maxCapacity,
                     conferenceCode: data.conferenceCode,
-                    cpeCredits: data.cpeCredits,
+                    cpeCredits: data.cpeCredits != null ? String(data.cpeCredits) : undefined,
                     status: data.status,
                     imageUrl: data.imageUrl,
                     mapUrl: data.mapUrl,
@@ -639,7 +639,7 @@ export default async function (fastify: FastifyInstance) {
                         groupName: data.groupName,
                         name: data.name,
                         sessionId: data.sessionId, // Keep for backward compat
-                        price: data.price,
+                        price: String(data.price),
                         currency: data.currency,
                         allowedRoles: data.allowedRoles,
                         quota: data.quota,
