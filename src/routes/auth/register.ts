@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { uploadToGoogleDrive } from "../../services/googleDrive.js";
 import { sendPendingApprovalEmail, sendSignupNotificationEmail } from "../../services/emailService.js";
+import { verifyRecaptcha, isRecaptchaEnabled } from "../../utils/recaptcha.js";
 
 const roleMapping = {
   thaiStudent: "thstd",
@@ -87,7 +88,26 @@ export async function authRoutes(fastify: FastifyInstance) {
         pharmacyLicenseId,
         country,
         phone,
+        recaptchaToken,
       } = result.data;
+
+      // Verify reCAPTCHA if enabled
+      if (isRecaptchaEnabled()) {
+        if (!recaptchaToken) {
+          return reply.status(400).send({
+            success: false,
+            error: "reCAPTCHA verification required",
+          });
+        }
+
+        const isValidRecaptcha = await verifyRecaptcha(recaptchaToken);
+        if (!isValidRecaptcha) {
+          return reply.status(400).send({
+            success: false,
+            error: "reCAPTCHA verification failed",
+          });
+        }
+      }
 
       // 1. Check duplicate email
       const existingUser = await db
