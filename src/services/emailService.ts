@@ -1,26 +1,132 @@
-import { Resend } from "resend";
+import axios from "axios";
 
-// Lazy Resend initialization
-let resendClient: Resend | null = null;
+// ============================================
+// NipaMail Configuration
+// ============================================
+const NIPAMAIL_API_URL = "https://api.nipamail.com";
 
-function getResendClient(): Resend {
-  if (!resendClient) {
-    if (!process.env.RESEND_API_KEY) {
-      throw new Error(
-        "RESEND_API_KEY not configured. Set RESEND_API_KEY in .env"
-      );
-    }
-    resendClient = new Resend(process.env.RESEND_API_KEY);
-  }
-  return resendClient;
+// Token cache (valid 1 hour, cache 55 min)
+let cachedToken: string | null = null;
+let tokenExpiry: number = 0;
+
+/**
+ * Encode content to Base64
+ */
+function encodeToBase64(content: string): string {
+  return Buffer.from(content).toString("base64");
 }
 
 /**
- * Get the sender email address
- * Uses EMAIL_FROM or falls back to Resend's testing domain
+ * Get sender string in format: "Name <email>"
  */
-function getFromEmail(): string {
-  return process.env.EMAIL_FROM || "ACCP Conference <onboarding@resend.dev>";
+function getSenderString(): string {
+  const name = process.env.NIPAMAIL_SENDER_NAME || "ACCP Conference";
+  const email = process.env.NIPAMAIL_SENDER_EMAIL;
+  if (!email) {
+    throw new Error("NIPAMAIL_SENDER_EMAIL not configured");
+  }
+  return `${name} <${email}>`;
+}
+
+/**
+ * Get NipaMail access token (with caching)
+ */
+async function getAccessToken(): Promise<string> {
+  // Return cached token if still valid
+  if (cachedToken && Date.now() < tokenExpiry) {
+    return cachedToken;
+  }
+
+  const clientId = process.env.NIPAMAIL_CLIENT_ID;
+  const clientSecret = process.env.NIPAMAIL_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    throw new Error(
+      "NipaMail credentials not configured. Set NIPAMAIL_CLIENT_ID and NIPAMAIL_CLIENT_SECRET in .env"
+    );
+  }
+
+  try {
+    const response = await axios.post(
+      `${NIPAMAIL_API_URL}/v1/auth/tokens`,
+      new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret,
+      }),
+      {
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      }
+    );
+
+    cachedToken = response.data.access_token;
+    tokenExpiry = Date.now() + 55 * 60 * 1000; // Cache for 55 minutes
+    return cachedToken!;
+  } catch (error: unknown) {
+    if (axios.isAxiosError(error) && error.response) {
+      throw new Error(
+        `NipaMail auth failed: ${error.response.data?.message || error.response.status}`
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Send email via NipaMail API
+ */
+async function sendNipaMailEmail(
+  recipient: string,
+  subject: string,
+  text: string,
+  retryOnAuth: boolean = true
+): Promise<void> {
+  const token = await getAccessToken();
+
+  // Convert plain text newlines to HTML line breaks for proper display
+  const htmlContent = text.replace(/\n/g, '<br>\n');
+
+  try {
+    await axios.post(
+      `${NIPAMAIL_API_URL}/v1/messages`,
+      {
+        type: "EMAIL",
+        message: {
+          sender: getSenderString(),
+          recipient: recipient,
+          subject: subject,
+          html: encodeToBase64(htmlContent),
+        },
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+  } catch (error: unknown) {
+    // Retry once if token invalid (401)
+    if (
+      retryOnAuth &&
+      axios.isAxiosError(error) &&
+      error.response?.status === 401
+    ) {
+      cachedToken = null; // Clear cache
+      return sendNipaMailEmail(recipient, subject, text, false);
+    }
+
+    if (axios.isAxiosError(error) && error.response) {
+      console.error(
+        "NipaMail send failed:",
+        JSON.stringify(error.response.data)
+      );
+      throw new Error(
+        `Email send failed: ${error.response.data?.message || error.response.status}`
+      );
+    }
+    throw error;
+  }
 }
 
 /**
@@ -70,17 +176,7 @@ Bangkok Thailand
   `.trim();
 
   try {
-    const { error } = await getResendClient().emails.send({
-      from: getFromEmail(),
-      to: [email],
-      subject: "Abstract Submission Received - 25th ACCP 2026",
-      text: plainText,
-    });
-
-    if (error) {
-      console.error("Error sending abstract submission email:", error);
-      throw error;
-    }
+    await sendNipaMailEmail(email, "Abstract Submission Received - 25th ACCP 2026", plainText);
     console.log(`Abstract submission email sent to ${email}`);
   } catch (error) {
     console.error("Error sending abstract submission email:", error);
@@ -114,17 +210,7 @@ Bangkok Thailand
   `.trim();
 
   try {
-    const { error } = await getResendClient().emails.send({
-      from: getFromEmail(),
-      to: [email],
-      subject: "Co-Author Notification - 25th ACCP 2026 Abstract",
-      text: plainText,
-    });
-
-    if (error) {
-      console.error("Error sending co-author notification email:", error);
-      throw error;
-    }
+    await sendNipaMailEmail(email, "Co-Author Notification - 25th ACCP 2026 Abstract", plainText);
     console.log(`Co-author notification email sent to ${email}`);
   } catch (error) {
     console.error("Error sending co-author notification email:", error);
@@ -160,17 +246,7 @@ Bangkok Thailand
   `.trim();
 
   try {
-    const { error } = await getResendClient().emails.send({
-      from: getFromEmail(),
-      to: [email],
-      subject: "Congratulations! Abstract Accepted (Poster) - 25th ACCP 2026",
-      text: plainText,
-    });
-
-    if (error) {
-      console.error("Error sending abstract accepted poster email:", error);
-      throw error;
-    }
+    await sendNipaMailEmail(email, "Congratulations! Abstract Accepted (Poster) - 25th ACCP 2026", plainText);
     console.log(`Abstract accepted (poster) email sent to ${email}`);
   } catch (error) {
     console.error("Error sending abstract accepted poster email:", error);
@@ -206,17 +282,7 @@ Bangkok Thailand
   `.trim();
 
   try {
-    const { error } = await getResendClient().emails.send({
-      from: getFromEmail(),
-      to: [email],
-      subject: "Congratulations! Abstract Accepted (Oral) - 25th ACCP 2026",
-      text: plainText,
-    });
-
-    if (error) {
-      console.error("Error sending abstract accepted oral email:", error);
-      throw error;
-    }
+    await sendNipaMailEmail(email, "Congratulations! Abstract Accepted (Oral) - 25th ACCP 2026", plainText);
     console.log(`Abstract accepted (oral) email sent to ${email}`);
   } catch (error) {
     console.error("Error sending abstract accepted oral email:", error);
@@ -249,17 +315,7 @@ Bangkok Thailand
   `.trim();
 
   try {
-    const { error } = await getResendClient().emails.send({
-      from: getFromEmail(),
-      to: [email],
-      subject: "Abstract Submission Update - 25th ACCP 2026",
-      text: plainText,
-    });
-
-    if (error) {
-      console.error("Error sending abstract rejected email:", error);
-      throw error;
-    }
+    await sendNipaMailEmail(email, "Abstract Submission Update - 25th ACCP 2026", plainText);
     console.log(`Abstract rejected email sent to ${email}`);
   } catch (error) {
     console.error("Error sending abstract rejected email:", error);
@@ -293,18 +349,13 @@ Sincerely,
 Bangkok Thailand
   `.trim();
 
-  const { error } = await getResendClient().emails.send({
-    from: getFromEmail(),
-    to: [email],
-    subject: "Registration Received - Document Verification Pending | 25th ACCP 2026",
-    text: plainText,
-  });
-
-  if (error) {
+  try {
+    await sendNipaMailEmail(email, "Registration Received - Document Verification Pending | 25th ACCP 2026", plainText);
+    console.log(`Pending approval email sent to ${email}`);
+  } catch (error) {
     console.error("Error sending pending approval email:", error);
     throw error;
   }
-  console.log(`Pending approval email sent to ${email}`);
 }
 
 /**
@@ -336,18 +387,13 @@ Sincerely,
 Bangkok Thailand
   `.trim();
 
-  const { error } = await getResendClient().emails.send({
-    from: getFromEmail(),
-    to: [email],
-    subject: "Document Approved - Registration Confirmed | 25th ACCP 2026",
-    text: plainText,
-  });
-
-  if (error) {
+  try {
+    await sendNipaMailEmail(email, "Document Approved - Registration Confirmed | 25th ACCP 2026", plainText);
+    console.log(`Verification approved email sent to ${email}`);
+  } catch (error) {
     console.error("Error sending verification approved email:", error);
     throw error;
   }
-  console.log(`Verification approved email sent to ${email}`);
 }
 
 /**
@@ -375,18 +421,13 @@ Sincerely,
 Bangkok Thailand
   `.trim();
 
-  const { error } = await getResendClient().emails.send({
-    from: getFromEmail(),
-    to: [email],
-    subject: "Document Requires Attention - Please Resubmit | 25th ACCP 2026",
-    text: plainText,
-  });
-
-  if (error) {
+  try {
+    await sendNipaMailEmail(email, "Document Requires Attention - Please Resubmit | 25th ACCP 2026", plainText);
+    console.log(`Verification rejected email sent to ${email}`);
+  } catch (error) {
     console.error("Error sending verification rejected email:", error);
     throw error;
   }
-  console.log(`Verification rejected email sent to ${email}`);
 }
 
 /**
@@ -414,18 +455,13 @@ Sincerely,
 Bangkok Thailand
   `.trim();
 
-  const { error } = await getResendClient().emails.send({
-    from: getFromEmail(),
-    to: [email],
-    subject: "Registration Successful - Welcome to 25th ACCP 2026",
-    text: plainText,
-  });
-
-  if (error) {
+  try {
+    await sendNipaMailEmail(email, "Registration Successful - Welcome to 25th ACCP 2026", plainText);
+    console.log(`Signup notification email sent to ${email}`);
+  } catch (error) {
     console.error("Error sending signup notification email:", error);
     throw error;
   }
-  console.log(`Signup notification email sent to ${email}`);
 }
 
 /**
@@ -455,18 +491,13 @@ Sincerely,
 Bangkok Thailand
   `.trim();
 
-  const { error } = await getResendClient().emails.send({
-    from: getFromEmail(),
-    to: [email],
-    subject: "Registration Confirmed - 25th ACCP 2026",
-    text: plainText,
-  });
-
-  if (error) {
+  try {
+    await sendNipaMailEmail(email, "Registration Confirmed - 25th ACCP 2026", plainText);
+    console.log(`Registration confirmation email sent to ${email}`);
+  } catch (error) {
     console.error("Error sending registration confirmation email:", error);
     throw error;
   }
-  console.log(`Registration confirmation email sent to ${email}`);
 }
 
 // ============================================
@@ -500,18 +531,13 @@ Sincerely,
 Bangkok Thailand
   `.trim();
 
-  const { error } = await getResendClient().emails.send({
-    from: getFromEmail(),
-    to: [email],
-    subject: "Reset Your Password - 25th ACCP 2026",
-    text: plainText,
-  });
-
-  if (error) {
+  try {
+    await sendNipaMailEmail(email, "Reset Your Password - 25th ACCP 2026", plainText);
+    console.log(`Password reset email sent to ${email}`);
+  } catch (error) {
     console.error("Error sending password reset email:", error);
     throw error;
   }
-  console.log(`Password reset email sent to ${email}`);
 }
 
 // ============================================
@@ -547,17 +573,11 @@ ${message}
 This message was sent via the ACCP 2026 website contact form.
   `.trim();
 
-  const { error } = await getResendClient().emails.send({
-    from: getFromEmail(),
-    to: [targetEmail],
-    replyTo: email,
-    subject: `[Contact Form] ${subject}`,
-    text: plainText,
-  });
-
-  if (error) {
+  try {
+    await sendNipaMailEmail(targetEmail, `[Contact Form] ${subject}`, plainText);
+    console.log(`Contact form email sent from ${email} to ${targetEmail}`);
+  } catch (error) {
     console.error("Error sending contact form email:", error);
     throw error;
   }
-  console.log(`Contact form email sent from ${email} to ${targetEmail}`);
 }
