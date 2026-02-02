@@ -1,14 +1,22 @@
 import { FastifyInstance } from "fastify";
 import { abstractSubmissionSchema } from "../../../schemas/abstracts.schema.js";
 import { db } from "../../../database/index.js";
-import { abstracts, abstractCoAuthors, users } from "../../../database/schema.js";
-import { uploadToGoogleDrive, getCategoryFolderName, getPresentationTypeFolderName, AbstractCategory, PresentationType } from "../../../services/googleDrive.js";
+import {
+  abstracts,
+  abstractCoAuthors,
+  users,
+} from "../../../database/schema.js";
+import {
+  uploadToGoogleDrive,
+  getCategoryFolderName,
+  getPresentationTypeFolderName,
+  AbstractCategory,
+  PresentationType,
+} from "../../../services/googleDrive.js";
 import { eq } from "drizzle-orm";
 
 // Allowed file types for abstract documents
-const ALLOWED_MIME_TYPES = [
-  "application/pdf",
-];
+const ALLOWED_MIME_TYPES = ["application/pdf"];
 
 // Max file size: 10MB
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -20,20 +28,28 @@ const DEFAULT_EVENT_ID = 1;
  * Helper function to count words in text
  */
 function countWords(text: string): number {
-  return text.trim().split(/\s+/).filter(word => word.length > 0).length;
+  return text
+    .trim()
+    .split(/\s+/)
+    .filter((word) => word.length > 0).length;
 }
 
 /**
  * Validate total word count for abstract sections
  */
-function validateWordCount(background: string, methods: string, results: string, conclusion: string): { valid: boolean; count: number } {
-  const totalText = [background, methods, results, conclusion].join(' ');
+function validateWordCount(
+  background: string,
+  methods: string,
+  results: string,
+  conclusion: string,
+): { valid: boolean; count: number } {
+  const totalText = [background, methods, results, conclusion].join(" ");
   const wordCount = countWords(totalText);
 
-  // Word count should be between 250-300 words
+  // Word count should be max 250 words
   return {
-    valid: wordCount >= 250 && wordCount <= 300,
-    count: wordCount
+    valid: wordCount <= 250,
+    count: wordCount,
   };
 }
 
@@ -137,11 +153,16 @@ export default async function (fastify: FastifyInstance) {
       } = result.data;
 
       // Validate word count
-      const wordValidation = validateWordCount(background, methods, results, conclusion);
+      const wordValidation = validateWordCount(
+        background,
+        methods,
+        results,
+        conclusion,
+      );
       if (!wordValidation.valid) {
         return reply.status(400).send({
           success: false,
-          error: `Abstract word count must be between 250-300 words. Current: ${wordValidation.count} words`,
+          error: `Abstract word count must not exceed 250 words. Current: ${wordValidation.count} words`,
         });
       }
 
@@ -157,17 +178,21 @@ export default async function (fastify: FastifyInstance) {
       // Files are organized into: ABSTRACT/{Presentation Type}/{Category}
       let fullPaperUrl: string;
       try {
-        const presentationFolderName = getPresentationTypeFolderName(presentationType as PresentationType);
-        const categoryFolderName = getCategoryFolderName(category as AbstractCategory);
+        const presentationFolderName = getPresentationTypeFolderName(
+          presentationType as PresentationType,
+        );
+        const categoryFolderName = getCategoryFolderName(
+          category as AbstractCategory,
+        );
         fullPaperUrl = await uploadToGoogleDrive(
           fileBuffer,
           fileName,
           mimeType,
           "abstracts",
-          presentationFolderName,  // First subfolder: "Poster presentation" or "Oral presentation"
-          categoryFolderName,      // Nested subfolder: "1. Clinical Pharmacy", etc.
-          presentationType as PresentationType,  // For direct ENV lookup (fast path)
-          category as AbstractCategory           // For direct ENV lookup (fast path)
+          presentationFolderName, // First subfolder: "Poster presentation" or "Oral presentation"
+          categoryFolderName, // Nested subfolder: "1. Clinical Pharmacy", etc.
+          presentationType as PresentationType, // For direct ENV lookup (fast path)
+          category as AbstractCategory, // For direct ENV lookup (fast path)
         );
       } catch (error) {
         fastify.log.error({ err: error }, "Google Drive upload failed");
@@ -232,7 +257,8 @@ export default async function (fastify: FastifyInstance) {
       // -----------------------------------------------------------------------
       const runEmailTasksInBackground = async () => {
         try {
-          const { sendAbstractSubmissionEmail, sendCoAuthorNotificationEmail } = await import("../../../services/emailService.js");
+          const { sendAbstractSubmissionEmail, sendCoAuthorNotificationEmail } =
+            await import("../../../services/emailService.js");
 
           // 1. Send to Main Author
           await sendAbstractSubmissionEmail(
@@ -240,10 +266,12 @@ export default async function (fastify: FastifyInstance) {
             firstName,
             lastName,
             newAbstract.id,
-            title
+            title,
           );
 
-          fastify.log.info(`Background: Abstract submission email sent to ${email}`);
+          fastify.log.info(
+            `Background: Abstract submission email sent to ${email}`,
+          );
 
           // 2. Send to Co-authors (with delay to prevent Rate Limit)
           if (coAuthors && coAuthors.length > 0) {
@@ -259,18 +287,26 @@ export default async function (fastify: FastifyInstance) {
                   coAuthor.lastName,
                   mainAuthorName,
                   newAbstract.id,
-                  title
+                  title,
                 );
-                fastify.log.info(`Background: Co-author notification sent to ${coAuthor.email}`);
+                fastify.log.info(
+                  `Background: Co-author notification sent to ${coAuthor.email}`,
+                );
               } catch (emailError) {
                 // Log error but don't stop the loop
-                fastify.log.error({ err: emailError }, `Failed to send co-author email to ${coAuthor.email}`);
+                fastify.log.error(
+                  { err: emailError },
+                  `Failed to send co-author email to ${coAuthor.email}`,
+                );
               }
             }
           }
         } catch (emailError) {
           // Log general email failure
-          fastify.log.error({ err: emailError }, "Background email task encountered an error");
+          fastify.log.error(
+            { err: emailError },
+            "Background email task encountered an error",
+          );
         }
       };
 
@@ -288,7 +324,6 @@ export default async function (fastify: FastifyInstance) {
         },
         message: "Abstract submitted successfully",
       });
-
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({
