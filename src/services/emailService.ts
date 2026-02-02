@@ -529,7 +529,7 @@ export async function sendContactFormEmail(
   subject: string,
   message: string
 ): Promise<void> {
-  const targetEmail = process.env.CONTACT_FORM_EMAIL || "perapong2920@gmail.com";
+  const targetEmail = process.env.CONTACT_FORM_EMAIL || "accpbangkok2026@gmail.com";
 
   const plainText = `
 New Contact Form Submission
