@@ -32,6 +32,7 @@ export type RegisterInput = z.infer<typeof registerBodySchema>;
 // Forgot Password Schema
 export const forgotPasswordSchema = z.object({
   email: z.string().email("Invalid email address"),
+  recaptchaToken: z.string().optional(),
 });
 
 // Reset Password Schema
