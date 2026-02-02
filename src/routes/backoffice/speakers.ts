@@ -1,25 +1,26 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { speakers, eventSpeakers, staffEventAssignments } from "../../database/schema.js";
+import { speakers, eventSpeakers, staffEventAssignments, Speaker } from "../../database/schema.js";
 import { createSpeakerSchema, updateSpeakerSchema } from "../../schemas/speakers.schema.js";
 import { eq, desc, ilike, or, inArray, and } from "drizzle-orm";
 import { z } from "zod";
 
 const speakerQuerySchema = z.object({
     eventId: z.coerce.number().optional(),
+    sessionId: z.coerce.number().optional(),
 });
 
 export default async function (fastify: FastifyInstance) {
     // List Speakers
     fastify.get("", async (request, reply) => {
-        const queryResult = speakerQuerySchema.safeParse(request.query);
-        const eventId = queryResult.success ? queryResult.data.eventId : undefined;
-
         // Get user from request (set by auth middleware)
         const user = (request as any).user;
 
         try {
-            let speakerList;
+            const queryResult = speakerQuerySchema.safeParse(request.query);
+            const { eventId, sessionId } = queryResult.success ? queryResult.data : { eventId: undefined, sessionId: undefined };
+
+            let speakerList: Speaker[] = [];
             let allowedEventIds: number[] | null = null;
 
             // If user is not admin, get their assigned events
@@ -37,74 +38,41 @@ export default async function (fastify: FastifyInstance) {
             }
 
             // Get all eventSpeakers relations (filtered by user permissions if not admin)
+            let esQuery = db.select().from(eventSpeakers);
+            let esConditions = [];
+
             if (allowedEventIds) {
-                const allEventSpeakers = await db
-                    .select()
-                    .from(eventSpeakers)
-                    .where(inArray(eventSpeakers.eventId, allowedEventIds));
-
-                // If filtering by specific eventId, also check it's in allowed list
-                const targetEventId = eventId && allowedEventIds.includes(eventId) ? eventId : null;
-
-                if (targetEventId) {
-                    const filtered = allEventSpeakers.filter(es => es.eventId === targetEventId);
-                    const speakerIds = [...new Set(filtered.map(es => es.speakerId))];
-
-                    if (speakerIds.length === 0) {
-                        return reply.send({ speakers: [], eventSpeakers: allEventSpeakers });
-                    }
-
-                    speakerList = await db
-                        .select()
-                        .from(speakers)
-                        .where(inArray(speakers.id, speakerIds))
-                        .orderBy(desc(speakers.createdAt));
-
-                    return reply.send({ speakers: speakerList, eventSpeakers: allEventSpeakers });
-                } else {
-                    // No specific eventId filter, show all allowed speakers
-                    const speakerIds = [...new Set(allEventSpeakers.map(es => es.speakerId))];
-
-                    if (speakerIds.length === 0) {
-                        return reply.send({ speakers: [], eventSpeakers: allEventSpeakers });
-                    }
-
-                    speakerList = await db
-                        .select()
-                        .from(speakers)
-                        .where(inArray(speakers.id, speakerIds))
-                        .orderBy(desc(speakers.createdAt));
-
-                    return reply.send({ speakers: speakerList, eventSpeakers: allEventSpeakers });
-                }
+                esConditions.push(inArray(eventSpeakers.eventId, allowedEventIds));
             }
 
-            // Admin path - get all eventSpeakers
-            const allEventSpeakers = await db.select().from(eventSpeakers);
-
-            // If eventId specified, filter speakers by that event
             if (eventId) {
-                const linkedSpeakers = await db
-                    .select({ speakerId: eventSpeakers.speakerId })
-                    .from(eventSpeakers)
-                    .where(eq(eventSpeakers.eventId, eventId));
+                esConditions.push(eq(eventSpeakers.eventId, eventId));
+            }
 
-                const speakerIds = [...new Set(linkedSpeakers.map(s => s.speakerId))];
+            if (sessionId) {
+                esConditions.push(eq(eventSpeakers.sessionId, sessionId));
+            }
 
-                if (speakerIds.length === 0) {
+            const allEventSpeakers = await esQuery.where(esConditions.length > 0 ? and(...esConditions) : undefined);
+            const speakerIds = [...new Set(allEventSpeakers.map(es => es.speakerId))];
+
+            if (speakerIds.length === 0) {
+                // If filtering by eventId or sessionId but no assignments found, return empty
+                if (eventId || sessionId) {
                     return reply.send({ speakers: [], eventSpeakers: allEventSpeakers });
                 }
 
+                // Otherwise, if admin or allowed, and no specific filter, return all speakers
+                if (!allowedEventIds) {
+                    speakerList = await db.select().from(speakers).orderBy(desc(speakers.createdAt));
+                } else {
+                    speakerList = [];
+                }
+            } else {
                 speakerList = await db
                     .select()
                     .from(speakers)
                     .where(inArray(speakers.id, speakerIds))
-                    .orderBy(desc(speakers.createdAt));
-            } else {
-                // No filter - return all speakers
-                speakerList = await db
-                    .select()
-                    .from(speakers)
                     .orderBy(desc(speakers.createdAt));
             }
 
@@ -182,8 +150,11 @@ export default async function (fastify: FastifyInstance) {
         const speakerId = parseInt(id);
 
         const bodySchema = z.object({
-            eventIds: z.array(z.number()),
-            speakerType: z.enum(["keynote", "panelist", "moderator", "guest"]).optional().default("guest"),
+            assignments: z.array(z.object({
+                eventId: z.number(),
+                sessionId: z.number().nullable().optional(),
+                speakerType: z.enum(["keynote", "panelist", "moderator", "guest"]).optional().default("guest"),
+            })),
         });
 
         const result = bodySchema.safeParse(request.body);
@@ -191,7 +162,7 @@ export default async function (fastify: FastifyInstance) {
             return reply.status(400).send({ error: "Invalid input", details: result.error.flatten() });
         }
 
-        const { eventIds, speakerType } = result.data;
+        const { assignments } = result.data;
 
         try {
             // Check if speaker exists
@@ -210,11 +181,12 @@ export default async function (fastify: FastifyInstance) {
                 .where(eq(eventSpeakers.speakerId, speakerId));
 
             // Insert new assignments
-            if (eventIds.length > 0) {
-                const newAssignments = eventIds.map(eventId => ({
+            if (assignments.length > 0) {
+                const newAssignments = assignments.map(a => ({
                     speakerId,
-                    eventId,
-                    speakerType: speakerType as "keynote" | "panelist" | "moderator" | "guest",
+                    eventId: a.eventId,
+                    sessionId: a.sessionId || null,
+                    speakerType: a.speakerType as "keynote" | "panelist" | "moderator" | "guest",
                     sortOrder: 0,
                 }));
 

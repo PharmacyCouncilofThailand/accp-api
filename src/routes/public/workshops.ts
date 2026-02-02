@@ -1,11 +1,11 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { sessions, events, ticketTypes, registrations, ticketSessions } from "../../database/schema.js";
+import { sessions, events, ticketTypes, registrations, ticketSessions, eventSpeakers, speakers } from "../../database/schema.js";
 import { eq, desc, sql, and, count, inArray } from "drizzle-orm";
 
 export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
     // Get all published workshop sessions (public, no auth required)
-    // Workshops are sessions belonging to events with category containing 'workshop' or 'preconference'
+    // Workshops are sessions belonging to events with category containing 'workshop'
     fastify.get("", async (request, reply) => {
         try {
             // Get all published events that are workshop-type
@@ -37,7 +37,6 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     room: sessions.room,
                     startTime: sessions.startTime,
                     endTime: sessions.endTime,
-                    speakers: sessions.speakers,
                     maxCapacity: sessions.maxCapacity,
                 })
                 .from(sessions)
@@ -49,6 +48,21 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     )
                 )
                 .orderBy(sessions.startTime);
+
+            // Fetch speakers for these sessions
+            const workshopSessionIds = workshopSessions.map(s => s.id);
+            const workshopSpeakers = workshopSessionIds.length > 0
+                ? await db
+                    .select({
+                        sessionId: eventSpeakers.sessionId,
+                        firstName: speakers.firstName,
+                        lastName: speakers.lastName,
+                        organization: speakers.organization,
+                    })
+                    .from(eventSpeakers)
+                    .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
+                    .where(inArray(eventSpeakers.sessionId, workshopSessionIds))
+                : [];
 
             // Get enrollment counts for each session
             // First get ticket types for these sessions
@@ -165,21 +179,13 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                 const isFull = session.maxCapacity ? enrolledCount >= session.maxCapacity : false;
                 const saleStartDate = saleDateMap.get(session.id); // Get earliest sale date
 
-                // Parse speakers from JSON string
-                let speakersArray: { name: string; affiliation?: string }[] = [];
-                if (session.speakers) {
-                    try {
-                        const parsed = JSON.parse(session.speakers);
-                        // If it's an array of strings, convert to objects
-                        if (Array.isArray(parsed)) {
-                            speakersArray = parsed.map((s: string | { name: string; affiliation?: string }) =>
-                                typeof s === 'string' ? { name: s } : s
-                            );
-                        }
-                    } catch {
-                        speakersArray = [];
-                    }
-                }
+                // Get speakers for this session
+                const instructors = workshopSpeakers
+                    .filter(ws => ws.sessionId === session.id)
+                    .map(ws => ({
+                        name: `${ws.firstName} ${ws.lastName}`,
+                        affiliation: ws.organization || undefined
+                    }));
 
                 // Calculate duration
                 const start = new Date(session.startTime);
@@ -212,7 +218,7 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                         ? `${availableTickets[0].currency} ${parseFloat(availableTickets[0].price).toLocaleString()}`
                         : 'Free',
                     tickets: availableTickets,
-                    instructors: speakersArray,
+                    instructors: instructors,
                     color: colors[index % colors.length],
                     icon: icons[index % icons.length],
                     isFull,

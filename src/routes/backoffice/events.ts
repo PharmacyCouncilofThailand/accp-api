@@ -8,6 +8,8 @@ import {
     eventImages,
     staffEventAssignments,
     registrations,
+    speakers,
+    eventSpeakers,
 } from "../../database/schema.js";
 import {
     createEventSchema,
@@ -130,11 +132,30 @@ export default async function (fastify: FastifyInstance) {
             }
 
             // Get sessions for this event
-            const eventSessions = await db
+            const sessionList = await db
                 .select()
                 .from(sessions)
                 .where(eq(sessions.eventId, parseInt(id)))
                 .orderBy(sessions.startTime);
+
+            // Fetch speakers for these sessions
+            const sessionIds = sessionList.map(s => s.id);
+            const sessionsWithSpeakers = await Promise.all(sessionList.map(async (s) => {
+                const sSpeakers = await db
+                    .select({
+                        id: speakers.id,
+                        firstName: speakers.firstName,
+                        lastName: speakers.lastName,
+                    })
+                    .from(eventSpeakers)
+                    .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
+                    .where(eq(eventSpeakers.sessionId, s.id));
+
+                return {
+                    ...s,
+                    speakers: sSpeakers.map(sp => `${sp.firstName} ${sp.lastName}`)
+                };
+            }));
 
             // Get tickets for this event
             const eventTickets = await db
@@ -151,7 +172,7 @@ export default async function (fastify: FastifyInstance) {
 
             return reply.send({
                 event,
-                sessions: eventSessions,
+                sessions: sessionsWithSpeakers,
                 tickets: eventTickets,
                 venueImages,
             });
@@ -335,7 +356,25 @@ export default async function (fastify: FastifyInstance) {
                 .where(eq(sessions.eventId, parseInt(eventId)))
                 .orderBy(sessions.startTime);
 
-            return reply.send({ sessions: sessionList });
+            // Fetch speakers for these sessions
+            const sessionsWithSpeakers = await Promise.all(sessionList.map(async (s) => {
+                const sSpeakers = await db
+                    .select({
+                        id: speakers.id,
+                        firstName: speakers.firstName,
+                        lastName: speakers.lastName,
+                    })
+                    .from(eventSpeakers)
+                    .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
+                    .where(eq(eventSpeakers.sessionId, s.id));
+
+                return {
+                    ...s,
+                    speakers: sSpeakers.map(sp => `${sp.firstName} ${sp.lastName}`)
+                };
+            }));
+
+            return reply.send({ sessions: sessionsWithSpeakers });
         } catch (error) {
             fastify.log.error(error);
             return reply.status(500).send({ error: "Failed to fetch sessions" });
@@ -366,21 +405,38 @@ export default async function (fastify: FastifyInstance) {
                 return reply.status(404).send({ error: "Event not found" });
             }
 
-            const [newSession] = await db
-                .insert(sessions)
-                .values({
-                    eventId: parseInt(eventId),
-                    sessionCode: data.sessionCode,
-                    sessionName: data.sessionName,
-                    sessionType: data.sessionType,
-                    description: data.description,
-                    room: data.room,
-                    startTime: new Date(data.startTime),
-                    endTime: new Date(data.endTime),
-                    speakers: data.speakers,
-                    maxCapacity: data.maxCapacity,
-                })
-                .returning();
+            const newSession = await db.transaction(async (tx) => {
+                const [session] = await tx
+                    .insert(sessions)
+                    .values({
+                        eventId: parseInt(eventId),
+                        sessionCode: data.sessionCode,
+                        sessionName: data.sessionName,
+                        sessionType: data.sessionType,
+                        isMainSession: data.isMainSession ?? false,
+                        description: data.description,
+                        room: data.room,
+                        startTime: new Date(data.startTime),
+                        endTime: new Date(data.endTime),
+                        maxCapacity: data.maxCapacity,
+                    })
+                    .returning();
+
+                // Handle speaker assignments
+                if (data.speakerIds && data.speakerIds.length > 0) {
+                    await tx.insert(eventSpeakers).values(
+                        data.speakerIds.map(sid => ({
+                            eventId: parseInt(eventId),
+                            sessionId: session.id,
+                            speakerId: sid,
+                            speakerType: "guest" as const, // Default to guest, can be updated later if needed
+                            sortOrder: 0,
+                        }))
+                    );
+                }
+
+                return session;
+            });
 
             return reply.status(201).send({ session: newSession });
         } catch (error) {
@@ -391,7 +447,7 @@ export default async function (fastify: FastifyInstance) {
 
     // Update Session
     fastify.patch("/:eventId/sessions/:sessionId", async (request, reply) => {
-        const { sessionId } = request.params as { eventId: string; sessionId: string };
+        const { eventId, sessionId } = request.params as { eventId: string; sessionId: string };
         const result = updateSessionSchema.safeParse(request.body);
         if (!result.success) {
             return reply
@@ -406,11 +462,36 @@ export default async function (fastify: FastifyInstance) {
         if (data.endTime) updates.endTime = new Date(data.endTime);
 
         try {
-            const [updatedSession] = await db
-                .update(sessions)
-                .set(updates)
-                .where(eq(sessions.id, parseInt(sessionId)))
-                .returning();
+            const updatedSession = await db.transaction(async (tx) => {
+                const [session] = await tx
+                    .update(sessions)
+                    .set(updates)
+                    .where(eq(sessions.id, parseInt(sessionId)))
+                    .returning();
+
+                if (!session) return null;
+
+                // Handle speaker assignments update if provided
+                if (data.speakerIds !== undefined) {
+                    // Delete existing mappings for this session
+                    await tx.delete(eventSpeakers).where(eq(eventSpeakers.sessionId, session.id));
+
+                    // Add new mappings
+                    if (data.speakerIds && data.speakerIds.length > 0) {
+                        await tx.insert(eventSpeakers).values(
+                            data.speakerIds.map(sid => ({
+                                eventId: parseInt(eventId),
+                                sessionId: session.id,
+                                speakerId: sid,
+                                speakerType: "guest" as const,
+                                sortOrder: 0,
+                            }))
+                        );
+                    }
+                }
+
+                return session;
+            });
 
             if (!updatedSession) {
                 return reply.status(404).send({ error: "Session not found" });

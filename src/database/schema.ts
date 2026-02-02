@@ -178,11 +178,11 @@ export const sessions = pgTable("sessions", {
   sessionCode: varchar("session_code", { length: 50 }).notNull(),
   sessionName: varchar("session_name", { length: 255 }).notNull(),
   sessionType: sessionTypeEnum("session_type").default("other"),
+  isMainSession: boolean("is_main_session").notNull().default(false),
   description: text("description"),
   room: varchar("room", { length: 100 }),
   startTime: timestamp("start_time").notNull(),
   endTime: timestamp("end_time").notNull(),
-  speakers: text("speakers"),
   maxCapacity: integer("max_capacity").default(100),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -374,7 +374,6 @@ export const speakers = pgTable("speakers", {
   id: serial("id").primaryKey(),
   firstName: varchar("first_name", { length: 100 }).notNull(),
   lastName: varchar("last_name", { length: 100 }).notNull(),
-  email: varchar("email", { length: 255 }),
   bio: text("bio"),
   photoUrl: varchar("photo_url", { length: 500 }),
   organization: varchar("organization", { length: 255 }),
@@ -511,8 +510,39 @@ export const checkInsRelations = relations(checkIns, ({ one }) => ({
 
 export const eventsRelations = relations(events, ({ many }) => ({
   registrations: many(registrations),
+  sessions: many(sessions),
+  eventSpeakers: many(eventSpeakers),
+  ticketTypes: many(ticketTypes),
+}));
+
+export const sessionsRelations = relations(sessions, ({ one, many }) => ({
+  event: one(events, {
+    fields: [sessions.eventId],
+    references: [events.id],
+  }),
+  eventSpeakers: many(eventSpeakers),
+}));
+
+export const speakersRelations = relations(speakers, ({ many }) => ({
+  eventSpeakers: many(eventSpeakers),
+}));
+
+export const eventSpeakersRelations = relations(eventSpeakers, ({ one }) => ({
+  event: one(events, {
+    fields: [eventSpeakers.eventId],
+    references: [events.id],
+  }),
+  speaker: one(speakers, {
+    fields: [eventSpeakers.speakerId],
+    references: [speakers.id],
+  }),
+  session: one(sessions, {
+    fields: [eventSpeakers.sessionId],
+    references: [sessions.id],
+  }),
 }));
 
 export const ticketTypesRelations = relations(ticketTypes, ({ many }) => ({
   registrations: many(registrations),
+  ticketSessions: many(ticketSessions),
 }));
