@@ -87,13 +87,14 @@ export default async function (fastify: FastifyInstance) {
         }));
       }
 
-      // 6. Sign JWT (include assignedCategories for reviewers)
+      // 6. Sign JWT (include assignedCategories and assignedPresentationTypes for reviewers)
       const token = fastify.jwt.sign(
         {
           id: staff.id,
           email: staff.email,
           role: staff.role,
           assignedCategories: staff.assignedCategories || [],
+          assignedPresentationTypes: staff.assignedPresentationTypes || [],
         },
         { expiresIn: "7d" }
       );
@@ -110,6 +111,7 @@ export default async function (fastify: FastifyInstance) {
           role: staff.role,
           assignedEvents,
           assignedCategories: staff.assignedCategories || [],
+          assignedPresentationTypes: staff.assignedPresentationTypes || [],
         },
       });
     } catch (error) {
