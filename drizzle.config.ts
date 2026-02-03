@@ -1,8 +1,10 @@
 import { defineConfig } from "drizzle-kit";
 import { config } from "dotenv";
 
-// Load .env from current directory
-config({ path: "./.env" });
+// Only load .env in development (Railway injects env vars directly)
+if (!process.env.DATABASE_URL) {
+  config({ path: "./.env" });
+}
 
 export default defineConfig({
   schema: "./src/database/schema.ts",
@@ -12,3 +14,4 @@ export default defineConfig({
     url: process.env.DATABASE_URL!,
   },
 });
+
