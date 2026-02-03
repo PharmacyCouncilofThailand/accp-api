@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "npm run db:push && node dist/index.js",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
@@ -20,6 +20,7 @@
     "bcryptjs": "^3.0.3",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.38.3",
+    "drizzle-kit": "^0.31.8",
     "fastify": "^5.2.0",
     "googleapis": "^170.0.0",
     "postgres": "^3.4.5",
@@ -29,7 +30,6 @@
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.10.2",
-    "drizzle-kit": "^0.31.8",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

@@ -77,6 +77,7 @@ export default async function (fastify: FastifyInstance) {
         return reply.status(403).send({
             success: false,
             error: "ACCOUNT_REJECTED",
+            rejectionReason: user.rejectionReason,
         });
       }
 

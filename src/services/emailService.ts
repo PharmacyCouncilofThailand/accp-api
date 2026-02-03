@@ -440,6 +440,36 @@ Bangkok Thailand
 }
 
 /**
+ * Send document resubmission confirmation email
+ * Called when user resubmits their verification document
+ */
+export async function sendDocumentResubmittedEmail(
+  email: string,
+  firstName: string,
+  lastName: string
+): Promise<void> {
+  const plainText = `
+Dear ${firstName} ${lastName},
+
+Thank you for resubmitting your verification document for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
+
+We have received your new document and will review it within 3-5 business days. After finishing checking the document, we will email you again for the registration confirmation.
+
+Sincerely,
+25th ACCP committee
+Bangkok Thailand
+  `.trim();
+
+  try {
+    await sendNipaMailEmail(email, "Document Resubmitted - Pending Review | 25th ACCP 2026", plainText);
+    console.log(`Document resubmission email sent to ${email}`);
+  } catch (error) {
+    console.error("Error sending document resubmission email:", error);
+    throw error;
+  }
+}
+
+/**
  * Send signup notification email (for non-student users)
  * Template: Sign up notification
  */
