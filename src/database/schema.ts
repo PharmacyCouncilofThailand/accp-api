@@ -444,6 +444,19 @@ export const abstractReviews = pgTable("abstract_reviews", {
 });
 
 // --------------------------------------------------------------------------
+// 8. VERIFICATION REJECTION HISTORY
+// --------------------------------------------------------------------------
+export const verificationRejectionHistory = pgTable("verification_rejection_history", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  reason: text("reason").notNull(),
+  rejectedBy: integer("rejected_by").references(() => backofficeUsers.id),
+  rejectedAt: timestamp("rejected_at").notNull().defaultNow(),
+});
+
+// --------------------------------------------------------------------------
 // TYPE EXPORTS
 // --------------------------------------------------------------------------
 export type User = typeof users.$inferSelect;

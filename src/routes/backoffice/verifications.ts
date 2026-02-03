@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { users } from "../../database/schema.js";
+import { users, verificationRejectionHistory, backofficeUsers } from "../../database/schema.js";
 import { eq, desc, isNotNull } from "drizzle-orm";
 import z from "zod";
 import { sendVerificationApprovedEmail, sendVerificationRejectedEmail } from "../../services/emailService.js";
@@ -112,6 +112,14 @@ export default async function (fastify: FastifyInstance) {
         return reply.status(404).send({ error: "User not found" });
       }
 
+      // Save rejection history with the backoffice user who rejected
+      const backofficeUser = request.user as { id: number } | undefined;
+      await db.insert(verificationRejectionHistory).values({
+        userId: parseInt(id),
+        reason: result.data.reason,
+        rejectedBy: backofficeUser?.id ?? null,
+      });
+
       // Send rejection email notification
       try {
         await sendVerificationRejectedEmail(
@@ -129,6 +137,43 @@ export default async function (fastify: FastifyInstance) {
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: "Failed to reject user" });
+    }
+  });
+
+  // Get rejection history for a user
+  fastify.get("/:id/rejection-history", async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    try {
+      const history = await db
+        .select({
+          id: verificationRejectionHistory.id,
+          reason: verificationRejectionHistory.reason,
+          rejectedAt: verificationRejectionHistory.rejectedAt,
+          rejectedBy: verificationRejectionHistory.rejectedBy,
+          rejectedByName: backofficeUsers.firstName,
+          rejectedByLastName: backofficeUsers.lastName,
+        })
+        .from(verificationRejectionHistory)
+        .leftJoin(backofficeUsers, eq(verificationRejectionHistory.rejectedBy, backofficeUsers.id))
+        .where(eq(verificationRejectionHistory.userId, parseInt(id)))
+        .orderBy(desc(verificationRejectionHistory.rejectedAt));
+
+      // Format the response to include full name
+      const formattedHistory = history.map(h => ({
+        id: h.id,
+        reason: h.reason,
+        rejectedAt: h.rejectedAt,
+        rejectedBy: h.rejectedBy,
+        rejectedByName: h.rejectedByName && h.rejectedByLastName 
+          ? `${h.rejectedByName} ${h.rejectedByLastName}` 
+          : h.rejectedByName || null,
+      }));
+
+      return reply.send({ history: formattedHistory });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ error: "Failed to fetch rejection history" });
     }
   });
 }
