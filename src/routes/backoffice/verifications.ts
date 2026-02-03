@@ -45,6 +45,7 @@ export default async function (fastify: FastifyInstance) {
             : user.status,
         submittedAt: user.createdAt.toISOString(),
         rejectionReason: user.rejectionReason,
+        resubmissionCount: user.resubmissionCount ?? 0,
       }));
 
       return reply.send({ pendingUsers: verifications });

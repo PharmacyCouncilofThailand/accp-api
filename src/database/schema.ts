@@ -109,6 +109,7 @@ export const users = pgTable("users", {
   verificationDocUrl: varchar("verification_doc_url", { length: 500 }),
   status: accountStatusEnum("status").notNull().default("pending_approval"),
   rejectionReason: text("rejection_reason"),
+  resubmissionCount: integer("resubmission_count").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
