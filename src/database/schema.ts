@@ -409,6 +409,7 @@ export const abstracts = pgTable("abstracts", {
   presentationType: presentationTypeEnum("presentation_type").notNull(),
   keywords: varchar("keywords", { length: 255 }),
   background: text("background").notNull(),
+  objective: text("objective").notNull(),
   methods: text("methods").notNull(),
   results: text("results").notNull(),
   conclusion: text("conclusion").notNull(),

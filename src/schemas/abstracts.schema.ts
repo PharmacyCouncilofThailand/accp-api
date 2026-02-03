@@ -27,6 +27,7 @@ export const abstractSubmissionSchema = z.object({
 
     // Abstract Content (word count validation will be done separately)
     background: z.string().min(50, 'Background must be at least 50 characters'),
+    objective: z.string().min(20, 'Objectives must be at least 20 characters'),
     methods: z.string().min(50, 'Methods must be at least 50 characters'),
     results: z.string().min(50, 'Results must be at least 50 characters'),
     conclusion: z.string().min(50, 'Conclusion must be at least 50 characters'),

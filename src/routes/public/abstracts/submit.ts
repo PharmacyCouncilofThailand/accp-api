@@ -39,16 +39,17 @@ function countWords(text: string): number {
  */
 function validateWordCount(
   background: string,
+  objective: string,
   methods: string,
   results: string,
   conclusion: string,
 ): { valid: boolean; count: number } {
-  const totalText = [background, methods, results, conclusion].join(" ");
+  const totalText = [background, objective, methods, results, conclusion].join(" ");
   const wordCount = countWords(totalText);
 
-  // Word count should be max 250 words
+  // Word count should be max 300 words (increased to account for objectives)
   return {
-    valid: wordCount <= 250,
+    valid: wordCount <= 300,
     count: wordCount,
   };
 }
@@ -145,6 +146,7 @@ export default async function (fastify: FastifyInstance) {
         presentationType,
         keywords,
         background,
+        objective,
         methods,
         results,
         conclusion,
@@ -155,6 +157,7 @@ export default async function (fastify: FastifyInstance) {
       // Validate word count
       const wordValidation = validateWordCount(
         background,
+        objective,
         methods,
         results,
         conclusion,
@@ -162,7 +165,7 @@ export default async function (fastify: FastifyInstance) {
       if (!wordValidation.valid) {
         return reply.status(400).send({
           success: false,
-          error: `Abstract word count must not exceed 250 words. Current: ${wordValidation.count} words`,
+          error: `Abstract word count must not exceed 300 words. Current: ${wordValidation.count} words`,
         });
       }
 
@@ -219,6 +222,7 @@ export default async function (fastify: FastifyInstance) {
         presentationType,
         keywords,
         background,
+        objective,
         methods,
         results,
         conclusion,
