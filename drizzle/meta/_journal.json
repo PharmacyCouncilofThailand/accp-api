@@ -57,6 +57,13 @@
       "when": 1769765215955,
       "tag": "0007_amazing_puppet_master",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1770087968523,
+      "tag": "0008_lyrical_mongoose",
+      "breakpoints": true
     }
   ]
 }
