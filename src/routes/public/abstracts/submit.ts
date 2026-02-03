@@ -47,9 +47,9 @@ function validateWordCount(
   const totalText = [background, objective, methods, results, conclusion].join(" ");
   const wordCount = countWords(totalText);
 
-  // Word count should be max 300 words (increased to account for objectives)
+  // Word count should be max 250 words
   return {
-    valid: wordCount <= 300,
+    valid: wordCount <= 250,
     count: wordCount,
   };
 }
@@ -165,7 +165,7 @@ export default async function (fastify: FastifyInstance) {
       if (!wordValidation.valid) {
         return reply.status(400).send({
           success: false,
-          error: `Abstract word count must not exceed 300 words. Current: ${wordValidation.count} words`,
+          error: `Abstract word count must not exceed 250 words. Current: ${wordValidation.count} words`,
         });
       }
 
