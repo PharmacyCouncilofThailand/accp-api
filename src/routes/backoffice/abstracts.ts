@@ -56,6 +56,28 @@ export default async function (fastify: FastifyInstance) {
                         pagination: { page, limit, total: 0, totalPages: 0 },
                     });
                 }
+
+                // Presentation type filtering for reviewers
+                const assignedPresentationTypes = user.assignedPresentationTypes || [];
+                console.log('Reviewer assignedPresentationTypes:', assignedPresentationTypes); // DEBUG
+                if (assignedPresentationTypes.length > 0) {
+                    // Reviewer can only see abstracts with their assigned presentation types
+                    type PresentationType = "poster" | "oral";
+                    const validPresentationTypes = assignedPresentationTypes.filter(
+                        (type): type is PresentationType =>
+                            ["poster", "oral"].includes(type)
+                    );
+                    if (validPresentationTypes.length > 0) {
+                        conditions.push(inArray(abstracts.presentationType, validPresentationTypes));
+                    } else {
+                        // No valid presentation types assigned
+                        return reply.send({
+                            abstracts: [],
+                            pagination: { page, limit, total: 0, totalPages: 0 },
+                        });
+                    }
+                }
+                // If no presentation types assigned, reviewer can see all presentation types
             }
             // Admin and other roles see all abstracts (no category filter applied)
 
