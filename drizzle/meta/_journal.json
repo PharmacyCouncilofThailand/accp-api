@@ -71,6 +71,13 @@
       "when": 1770102425283,
       "tag": "0009_silent_sway",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1770131569249,
+      "tag": "0010_volatile_crusher_hogan",
+      "breakpoints": true
     }
   ]
 }

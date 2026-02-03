@@ -57,7 +57,7 @@ export const abstractCategoryEnum = pgEnum("abstract_category", [
   "community_pharmacy",
   "pharmacology_toxicology",
   "pharmacy_education",
-  "digital_pharmacy"
+  "digital_pharmacy",
 ]);
 export const presentationTypeEnum = pgEnum("presentation_type", [
   "oral",
@@ -139,7 +139,12 @@ export const backofficeUsers = pgTable("backoffice_users", {
   lastName: varchar("last_name", { length: 100 }).notNull(),
   conferenceCode: varchar("conference_code", { length: 100 }),
   // Categories that this reviewer is responsible for (only applicable for role = 'reviewer')
-  assignedCategories: jsonb("assigned_categories").$type<string[]>().default([]),
+  assignedCategories: jsonb("assigned_categories")
+    .$type<string[]>()
+    .default([]),
+  assignedPresentationTypes: jsonb("assigned_presentation_types")
+    .$type<string[]>()
+    .default([]),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -399,8 +404,7 @@ export const eventSpeakers = pgTable("event_speakers", {
 
 export const abstracts = pgTable("abstracts", {
   id: serial("id").primaryKey(),
-  userId: integer("user_id")
-    .references(() => users.id),
+  userId: integer("user_id").references(() => users.id),
   eventId: integer("event_id")
     .notNull()
     .references(() => events.id),
@@ -447,15 +451,18 @@ export const abstractReviews = pgTable("abstract_reviews", {
 // --------------------------------------------------------------------------
 // 8. VERIFICATION REJECTION HISTORY
 // --------------------------------------------------------------------------
-export const verificationRejectionHistory = pgTable("verification_rejection_history", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  reason: text("reason").notNull(),
-  rejectedBy: integer("rejected_by").references(() => backofficeUsers.id),
-  rejectedAt: timestamp("rejected_at").notNull().defaultNow(),
-});
+export const verificationRejectionHistory = pgTable(
+  "verification_rejection_history",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    reason: text("reason").notNull(),
+    rejectedBy: integer("rejected_by").references(() => backofficeUsers.id),
+    rejectedAt: timestamp("rejected_at").notNull().defaultNow(),
+  },
+);
 
 // --------------------------------------------------------------------------
 // TYPE EXPORTS

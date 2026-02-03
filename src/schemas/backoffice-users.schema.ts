@@ -10,6 +10,9 @@ const abstractCategoryEnum = z.enum([
   "digital_pharmacy",
 ]);
 
+// Valid presentation types for reviewer assignment
+const presentationTypeEnum = z.enum(["oral", "poster"]);
+
 export const createUserSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
@@ -18,6 +21,8 @@ export const createUserSchema = z.object({
   role: z.enum(["admin", "organizer", "reviewer", "staff", "verifier"]),
   // For reviewers: categories they can review
   assignedCategories: z.array(abstractCategoryEnum).optional(),
+  // For reviewers: presentation types they can review
+  assignedPresentationTypes: z.array(presentationTypeEnum).optional(),
 });
 
 export const updateUserSchema = z.object({
@@ -31,6 +36,8 @@ export const updateUserSchema = z.object({
   email: z.string().email().optional(),
   // For reviewers: categories they can review
   assignedCategories: z.array(abstractCategoryEnum).optional(),
+  // For reviewers: presentation types they can review
+  assignedPresentationTypes: z.array(presentationTypeEnum).optional(),
 });
 
 export const assignEventSchema = z.object({

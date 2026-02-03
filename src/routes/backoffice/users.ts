@@ -27,6 +27,7 @@ export default async function (fastify: FastifyInstance) {
           role: backofficeUsers.role,
           isActive: backofficeUsers.isActive,
           assignedCategories: backofficeUsers.assignedCategories,
+          assignedPresentationTypes: backofficeUsers.assignedPresentationTypes,
           createdAt: backofficeUsers.createdAt,
         })
         .from(backofficeUsers)
@@ -47,7 +48,7 @@ export default async function (fastify: FastifyInstance) {
             ...user,
             assignedEventIds: assignments.map((a) => a.eventId),
           };
-        })
+        }),
       );
 
       return reply.send({ users: usersWithAssignments });
@@ -66,7 +67,15 @@ export default async function (fastify: FastifyInstance) {
         .send({ error: "Invalid input", details: result.error.flatten() });
     }
 
-    const { email, password, firstName, lastName, role, assignedCategories } = result.data;
+    const {
+      email,
+      password,
+      firstName,
+      lastName,
+      role,
+      assignedCategories,
+      assignedPresentationTypes,
+    } = result.data;
 
     try {
       const existingUser = await db
@@ -90,6 +99,7 @@ export default async function (fastify: FastifyInstance) {
           role,
           isActive: true,
           assignedCategories: assignedCategories || [],
+          assignedPresentationTypes: assignedPresentationTypes || [],
         })
         .returning();
 
@@ -117,10 +127,12 @@ export default async function (fastify: FastifyInstance) {
       const existingUser = await db
         .select()
         .from(backofficeUsers)
-        .where(and(
-          eq(backofficeUsers.email, updates.email as string),
-          ne(backofficeUsers.id, parseInt(id))
-        ))
+        .where(
+          and(
+            eq(backofficeUsers.email, updates.email as string),
+            ne(backofficeUsers.id, parseInt(id)),
+          ),
+        )
         .limit(1);
 
       if (existingUser.length > 0) {
@@ -129,7 +141,10 @@ export default async function (fastify: FastifyInstance) {
     }
 
     if (updates.password) {
-      updates.passwordHash = await bcrypt.hash(updates.password as string, BCRYPT_ROUNDS);
+      updates.passwordHash = await bcrypt.hash(
+        updates.password as string,
+        BCRYPT_ROUNDS,
+      );
       delete updates.password;
     }
 
@@ -202,7 +217,7 @@ export default async function (fastify: FastifyInstance) {
             eventIds.map((eventId) => ({
               staffId: userId,
               eventId,
-            }))
+            })),
           );
         }
       });
