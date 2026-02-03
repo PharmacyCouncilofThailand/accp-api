@@ -35,6 +35,8 @@ RUN apk add --no-cache postgresql-client
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/drizzle ./drizzle
+COPY --from=builder /app/drizzle.config.ts ./
+COPY --from=builder /app/src/database/schema.ts ./src/database/schema.ts
 
 # Install production dependencies only
 RUN npm install --legacy-peer-deps --omit=dev
@@ -50,4 +52,5 @@ EXPOSE 3002
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3002/health || exit 1
 
-CMD ["node", "dist/index.js"]
+# Run db:push then start server
+CMD ["sh", "-c", "npx drizzle-kit push && node dist/index.js"]
