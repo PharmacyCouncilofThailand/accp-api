@@ -35,10 +35,10 @@ export default async function (fastify: FastifyInstance) {
                 if (assignedCategories.length > 0) {
                     // Reviewer can only see abstracts in their assigned categories
                     // Cast to enum type for TypeScript compatibility
-                    type CategoryType = "clinical_pharmacy" | "social_administrative" | "pharmaceutical_sciences" | "pharmacology_toxicology" | "pharmacy_education" | "digital_pharmacy";
+                    type CategoryType = "clinical_pharmacy" | "social_administrative" | "community_pharmacy" | "pharmacology_toxicology" | "pharmacy_education" | "digital_pharmacy";
                     const validCategories = assignedCategories.filter(
                         (cat): cat is CategoryType =>
-                            ["clinical_pharmacy", "social_administrative", "pharmaceutical_sciences", "pharmacology_toxicology", "pharmacy_education", "digital_pharmacy"].includes(cat)
+                            ["clinical_pharmacy", "social_administrative", "community_pharmacy", "pharmacology_toxicology", "pharmacy_education", "digital_pharmacy"].includes(cat)
                     );
                     if (validCategories.length > 0) {
                         conditions.push(inArray(abstracts.category, validCategories));

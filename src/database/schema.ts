@@ -54,7 +54,7 @@ export const registrationStatusEnum = pgEnum("registration_status", [
 export const abstractCategoryEnum = pgEnum("abstract_category", [
   "clinical_pharmacy",
   "social_administrative",
-  "pharmaceutical_sciences",
+  "community_pharmacy",
   "pharmacology_toxicology",
   "pharmacy_education",
   "digital_pharmacy"

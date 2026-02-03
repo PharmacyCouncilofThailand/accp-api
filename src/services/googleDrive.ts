@@ -38,7 +38,7 @@ const FOLDER_ENV_MAP: Record<UploadFolderType, string> = {
 export type AbstractCategory =
   | "clinical_pharmacy"
   | "social_administrative"
-  | "pharmaceutical_sciences"
+  | "community_pharmacy"
   | "pharmacology_toxicology"
   | "pharmacy_education"
   | "digital_pharmacy";
@@ -56,7 +56,7 @@ const PRESENTATION_TYPE_FOLDER_NAMES: Record<PresentationType, string> = {
 const CATEGORY_FOLDER_NAMES: Record<AbstractCategory, string> = {
   clinical_pharmacy: "1. Clinical Pharmacy",
   social_administrative: "2. Social and Administrative Pharmacy",
-  pharmaceutical_sciences: "3. Pharmaceutical Sciences",
+  community_pharmacy: "3. Community Pharmacy",
   pharmacology_toxicology: "4. Pharmacology and Toxicology",
   pharmacy_education: "5. Pharmacy Education",
   digital_pharmacy: "6. Digital Pharmacy and Innovation",
@@ -68,7 +68,7 @@ const DIRECT_SUBFOLDER_ENV_MAP: Record<PresentationType, Record<AbstractCategory
   poster: {
     clinical_pharmacy: "GOOGLE_DRIVE_FOLDER_POSTER_CLINICAL_PHARMACY",
     social_administrative: "GOOGLE_DRIVE_FOLDER_POSTER_SOCIAL_ADMINISTRATIVE",
-    pharmaceutical_sciences: "GOOGLE_DRIVE_FOLDER_POSTER_PHARMACEUTICAL_SCIENCES",
+    community_pharmacy: "GOOGLE_DRIVE_FOLDER_POSTER_COMMUNITY_PHARMACY",
     pharmacology_toxicology: "GOOGLE_DRIVE_FOLDER_POSTER_PHARMACOLOGY_TOXICOLOGY",
     pharmacy_education: "GOOGLE_DRIVE_FOLDER_POSTER_PHARMACY_EDUCATION",
     digital_pharmacy: "GOOGLE_DRIVE_FOLDER_POSTER_DIGITAL_PHARMACY",
@@ -76,7 +76,7 @@ const DIRECT_SUBFOLDER_ENV_MAP: Record<PresentationType, Record<AbstractCategory
   oral: {
     clinical_pharmacy: "GOOGLE_DRIVE_FOLDER_ORAL_CLINICAL_PHARMACY",
     social_administrative: "GOOGLE_DRIVE_FOLDER_ORAL_SOCIAL_ADMINISTRATIVE",
-    pharmaceutical_sciences: "GOOGLE_DRIVE_FOLDER_ORAL_PHARMACEUTICAL_SCIENCES",
+    community_pharmacy: "GOOGLE_DRIVE_FOLDER_ORAL_COMMUNITY_PHARMACY",
     pharmacology_toxicology: "GOOGLE_DRIVE_FOLDER_ORAL_PHARMACOLOGY_TOXICOLOGY",
     pharmacy_education: "GOOGLE_DRIVE_FOLDER_ORAL_PHARMACY_EDUCATION",
     digital_pharmacy: "GOOGLE_DRIVE_FOLDER_ORAL_DIGITAL_PHARMACY",

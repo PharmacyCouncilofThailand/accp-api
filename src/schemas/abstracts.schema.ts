@@ -21,7 +21,7 @@ export const abstractSubmissionSchema = z.object({
 
     // Abstract Details
     title: z.string().min(10, 'Title must be at least 10 characters').max(500, 'Title too long'),
-    category: z.enum(['clinical_pharmacy', 'social_administrative', 'pharmaceutical_sciences', 'pharmacology_toxicology', 'pharmacy_education', 'digital_pharmacy']),
+    category: z.enum(['clinical_pharmacy', 'social_administrative', 'community_pharmacy', 'pharmacology_toxicology', 'pharmacy_education', 'digital_pharmacy']),
     presentationType: z.enum(['oral', 'poster']),
     keywords: z.string().min(1, 'Keywords are required'),
 
@@ -45,7 +45,7 @@ export const abstractListSchema = z.object({
     search: z.string().optional(),
     eventId: z.coerce.number().optional(),
     status: z.enum(['pending', 'accepted', 'rejected']).optional(),
-    category: z.enum(['clinical_pharmacy', 'social_administrative', 'pharmaceutical_sciences', 'pharmacology_toxicology', 'pharmacy_education', 'digital_pharmacy']).optional(),
+    category: z.enum(['clinical_pharmacy', 'social_administrative', 'community_pharmacy', 'pharmacology_toxicology', 'pharmacy_education', 'digital_pharmacy']).optional(),
     presentationType: z.enum(['oral', 'poster']).optional(),
 });
 

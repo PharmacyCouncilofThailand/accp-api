@@ -76,7 +76,7 @@ export interface Registration {
 export type AbstractCategory =
   | 'clinical_pharmacy'
   | 'social_administrative'
-  | 'pharmaceutical_sciences'
+  | 'community_pharmacy'
   | 'pharmacology_toxicology'
   | 'pharmacy_education'
   | 'digital_pharmacy';
