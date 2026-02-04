@@ -34,7 +34,7 @@ fastify.register(cors, {
 // Rate Limiting - Global default
 // ============================================================================
 fastify.register(rateLimit, {
-  max: 100,
+  max: 600,  // Increased for shared network support (hospitals/universities)
   timeWindow: "1 minute",
   errorResponseBuilder: () => ({
     success: false,
@@ -151,11 +151,22 @@ import publicContactRoutes from "./routes/public/contact.js";
 
 // Auth routes with stricter rate limiting for login
 fastify.register(async (authPlugin) => {
-  // Stricter rate limit for login (5 requests per minute)
+  // Hybrid rate limit: Email-based (if available) or IP-based fallback
   authPlugin.register(rateLimit, {
-    max: 5,
+    max: 30,  // Allow 30 attempts/min to support multiple users on same IP
     timeWindow: "1 minute",
-    keyGenerator: (request) => request.ip,
+    // Must use preHandler hook to read parsed body
+    hook: 'preHandler',
+    // If email exists, rate limit by email; otherwise by IP
+    keyGenerator: (request) => {
+      const body = request.body as { email?: string };
+      return body?.email || request.ip;
+    },
+    errorResponseBuilder: () => ({
+      success: false,
+      code: "AUTH_RATE_LIMIT",
+      error: "คุณพยายามเข้าสู่ระบบบ่อยเกินไป กรุณารอ 1 นาทีก่อนลองใหม่",
+    }),
   });
   authPlugin.register(loginRoutes);
 }, { prefix: "/auth" });
