@@ -155,7 +155,7 @@ export async function sendAbstractSubmissionEmail(
   email: string,
   firstName: string,
   lastName: string,
-  abstractId: number,
+  trackingId: string,
   abstractTitle: string
 ): Promise<void> {
   const contactEmail = getContactEmail();
@@ -165,7 +165,7 @@ Thank you for submitting the abstract for the poster or oral presentation at the
 
 We have already received your abstract and will notify you of the result of the abstract acceptance within 2 weeks after abstract submission.
 
-Tracking ID: ACCP2026-${abstractId}
+Tracking ID: ${trackingId}
 Abstract Title: ${abstractTitle}
 
 If you have any questions, please get in touch with ${contactEmail}
@@ -193,7 +193,7 @@ export async function sendCoAuthorNotificationEmail(
   firstName: string,
   lastName: string,
   mainAuthorName: string,
-  abstractId: number,
+  trackingId: string,
   abstractTitle: string
 ): Promise<void> {
   const plainText = `
@@ -201,7 +201,7 @@ Dear ${firstName} ${lastName},
 
 We would like to notify you that your co-authored abstract, titled "${abstractTitle}", has been submitted to the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 
-Tracking ID: ACCP2026-${abstractId}
+Tracking ID: ${trackingId}
 Submitted by: ${mainAuthorName}
 
 Sincerely,
