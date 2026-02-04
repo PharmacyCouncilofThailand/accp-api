@@ -18,8 +18,8 @@ import { eq } from "drizzle-orm";
 // Allowed file types for abstract documents
 const ALLOWED_MIME_TYPES = ["application/pdf"];
 
-// Max file size: 10MB
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
+// Max file size: 30MB
+const MAX_FILE_SIZE = 30 * 1024 * 1024;
 
 // Default event ID for ACCP 2026 (adjust this based on your actual event ID)
 const DEFAULT_EVENT_ID = 1;
