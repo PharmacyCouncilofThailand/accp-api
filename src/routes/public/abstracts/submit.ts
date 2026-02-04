@@ -13,7 +13,7 @@ import {
   AbstractCategory,
   PresentationType,
 } from "../../../services/googleDrive.js";
-import { eq } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
 // Allowed file types for abstract documents
 const ALLOWED_MIME_TYPES = ["application/pdf"];
@@ -241,6 +241,26 @@ export default async function (fastify: FastifyInstance) {
         .values(abstractData)
         .returning();
 
+      // Generate tracking ID based on presentation type
+      const prefix = process.env.TRACKING_ID_PREFIX || "ACCP2026";
+      const padLength = parseInt(process.env.TRACKING_ID_PAD_LENGTH || "3", 10);
+      const typePrefix = presentationType === "oral" ? "O" : "P";
+      
+      // Count existing abstracts of same presentation type to get running number
+      const countResult = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(abstracts)
+        .where(eq(abstracts.presentationType, presentationType as "oral" | "poster"));
+      
+      const runningNumber = (countResult[0]?.count || 0);
+      const trackingId = `${prefix}-${typePrefix}${String(runningNumber).padStart(padLength, "0")}`;
+      
+      // Update abstract with tracking ID
+      await db
+        .update(abstracts)
+        .set({ trackingId })
+        .where(eq(abstracts.id, newAbstract.id));
+
       // Insert co-authors if any
       if (coAuthors && coAuthors.length > 0) {
         const coAuthorsToInsert = coAuthors.map((coAuthor, index) => ({
@@ -269,7 +289,7 @@ export default async function (fastify: FastifyInstance) {
             email,
             firstName,
             lastName,
-            newAbstract.id,
+            trackingId,
             title,
           );
 
@@ -290,7 +310,7 @@ export default async function (fastify: FastifyInstance) {
                   coAuthor.firstName,
                   coAuthor.lastName,
                   mainAuthorName,
-                  newAbstract.id,
+                  trackingId,
                   title,
                 );
                 fastify.log.info(
@@ -322,6 +342,7 @@ export default async function (fastify: FastifyInstance) {
         success: true,
         abstract: {
           id: newAbstract.id,
+          trackingId,
           title: newAbstract.title,
           status: newAbstract.status,
           submittedAt: newAbstract.createdAt,

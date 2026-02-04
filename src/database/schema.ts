@@ -404,6 +404,7 @@ export const eventSpeakers = pgTable("event_speakers", {
 
 export const abstracts = pgTable("abstracts", {
   id: serial("id").primaryKey(),
+  trackingId: varchar("tracking_id", { length: 20 }).unique(),
   userId: integer("user_id").references(() => users.id),
   eventId: integer("event_id")
     .notNull()

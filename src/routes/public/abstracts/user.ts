@@ -37,6 +37,7 @@ export default async function (fastify: FastifyInstance) {
             const userAbstracts = await db
                 .select({
                     id: abstracts.id,
+                    trackingId: abstracts.trackingId,
                     title: abstracts.title,
                     category: abstracts.category,
                     presentationType: abstracts.presentationType,
@@ -63,7 +64,6 @@ export default async function (fastify: FastifyInstance) {
 
                     return {
                         ...abstract,
-                        trackingId: `ACCP2026-${abstract.id}`,
                         coAuthors,
                     };
                 })
