@@ -48,7 +48,7 @@ fastify.register(rateLimit, {
 // ============================================================================
 fastify.register(multipart, {
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB
+    fileSize: 30 * 1024 * 1024, // 30MB
   },
 });
 fastify.register(jwt, {
@@ -81,6 +81,15 @@ declare module "fastify" {
 // Global Error Handler
 // ============================================================================
 fastify.setErrorHandler((error: FastifyError | ApiError, request, reply) => {
+  // Handle multipart file size limit errors
+  if (error.code === 'FST_REQ_FILE_TOO_LARGE') {
+    return reply.status(400).send({
+      success: false,
+      code: "FILE_TOO_LARGE",
+      error: "File too large. Maximum size allowed is 30MB.",
+    });
+  }
+
   // Handle ApiError instances
   if (error instanceof ApiError) {
     return reply.status(error.statusCode).send(error.toJSON());
