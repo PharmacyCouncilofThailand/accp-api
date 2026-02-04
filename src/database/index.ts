@@ -10,8 +10,11 @@ if (!connectionString) {
   process.exit(1);
 }
 
-const client = postgres(connectionString);
+const client = postgres(connectionString, {
+  max: 20, // Maximum number of connections in the pool
+  idle_timeout: 20, // Close idle connections after 20 seconds
+  connect_timeout: 30, // Connection timeout in seconds
+});
 export const db = drizzle(client, { schema });
 
 export * from "./schema.js";
-
