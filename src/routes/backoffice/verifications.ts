@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
 import { users, verificationRejectionHistory, backofficeUsers } from "../../database/schema.js";
-import { eq, desc, isNotNull } from "drizzle-orm";
+import { eq, desc, isNotNull, ilike, or, count, and, SQL } from "drizzle-orm";
 import z from "zod";
 import { sendVerificationApprovedEmail, sendVerificationRejectedEmail } from "../../services/emailService.js";
 
@@ -13,30 +13,78 @@ const approveSchema = z.object({
   comment: z.string().optional(),
 });
 
+// Query schema for listing verifications
+const listVerificationsQuerySchema = z.object({
+  page: z.coerce.number().min(1).default(1),
+  limit: z.coerce.number().min(1).max(100).default(10),
+  search: z.string().optional(),
+  status: z.enum(["pending", "approved", "rejected"]).optional(),
+});
+
 export default async function (fastify: FastifyInstance) {
-  // List all verifications (filtered by having a document URL)
+  // List all verifications (with pagination)
   fastify.get("", async (request, reply) => {
+    const queryResult = listVerificationsQuerySchema.safeParse(request.query);
+    if (!queryResult.success) {
+      return reply.status(400).send({ error: "Invalid query", details: queryResult.error.flatten() });
+    }
+
+    const { page, limit, search, status } = queryResult.data;
+    const offset = (page - 1) * limit;
+
     try {
+      const conditions: SQL[] = [];
+
+      // Filter users who submitted verification document
+      conditions.push(isNotNull(users.verificationDocUrl));
+
+      // Filter by status (map to db status)
+      if (status) {
+        const dbStatus = status === "approved" ? "active" : status === "pending" ? "pending_approval" : status;
+        conditions.push(eq(users.status, dbStatus as any));
+      }
+
+      // Search by name, email, id, or registration code
+      if (search) {
+        conditions.push(
+          or(
+            ilike(users.firstName, `%${search}%`),
+            ilike(users.lastName, `%${search}%`),
+            ilike(users.email, `%${search}%`),
+            ilike(users.thaiIdCard, `%${search}%`),
+            ilike(users.passportId, `%${search}%`)
+          )!
+        );
+      }
+
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+      // Count total
+      const [{ totalCount }] = await db
+        .select({ totalCount: count() })
+        .from(users)
+        .where(whereClause);
+
+      // Fetch verifications with pagination
       const usersWithDocs = await db
         .select()
         .from(users)
-        // Filter users who submitted verification document (all history)
-        .where(isNotNull(users.verificationDocUrl))
-        .orderBy(desc(users.createdAt));
+        .where(whereClause)
+        .orderBy(desc(users.createdAt))
+        .limit(limit)
+        .offset(offset);
 
-      /* 
-               Map to Verification interface expected by frontend
-            */
+      /* Map to Verification interface expected by frontend */
       const verifications = usersWithDocs.map((user) => ({
-        id: user.id.toString(), // Frontend expects string ID usually
+        id: user.id.toString(),
         name: `${user.firstName} ${user.lastName}`,
         email: user.email,
         university: user.institution || "N/A",
-        studentId: user.thaiIdCard || user.passportId || "N/A", // Use ID card/Passport as Student ID equivalent for now
+        studentId: user.thaiIdCard || user.passportId || "N/A",
         role: user.role === "thstd" ? "thai-student" : "intl-student",
-        documentType: "Student Document", // Generic label
+        documentType: "Student Document",
         documentUrl: user.verificationDocUrl,
-        registrationCode: "-", // Placeholder as registration might happen after approval
+        registrationCode: "-",
         status:
           user.status === "pending_approval"
             ? "pending"
@@ -48,7 +96,15 @@ export default async function (fastify: FastifyInstance) {
         resubmissionCount: user.resubmissionCount ?? 0,
       }));
 
-      return reply.send({ pendingUsers: verifications });
+      return reply.send({
+        verifications,
+        pagination: {
+          page,
+          limit,
+          total: totalCount,
+          totalPages: Math.ceil(totalCount / limit),
+        },
+      });
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: "Failed to fetch verifications" });
@@ -64,7 +120,7 @@ export default async function (fastify: FastifyInstance) {
     try {
       const [updatedUser] = await db
         .update(users)
-        .set({ status: "active" }) // Set to active (approved)
+        .set({ status: "active" })
         .where(eq(users.id, parseInt(id)))
         .returning();
 

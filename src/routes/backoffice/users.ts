@@ -11,13 +11,57 @@ import {
   assignEventSchema,
 } from "../../schemas/backoffice-users.schema.js";
 import bcrypt from "bcryptjs";
-import { eq, desc, ne, and } from "drizzle-orm";
+import { eq, desc, ne, and, ilike, or, count, SQL } from "drizzle-orm";
 import { BCRYPT_ROUNDS } from "../../constants/auth.js";
+import { z } from "zod";
+
+// Query schema for listing users
+const listUsersQuerySchema = z.object({
+  page: z.coerce.number().min(1).default(1),
+  limit: z.coerce.number().min(1).max(100).default(10),
+  search: z.string().optional(),
+  role: z.string().optional(),
+});
 
 export default async function (fastify: FastifyInstance) {
-  // List Users
+  // List Users (with pagination)
   fastify.get("", async (request, reply) => {
+    const queryResult = listUsersQuerySchema.safeParse(request.query);
+    if (!queryResult.success) {
+      return reply.status(400).send({ error: "Invalid query", details: queryResult.error.flatten() });
+    }
+
+    const { page, limit, search, role } = queryResult.data;
+    const offset = (page - 1) * limit;
+
     try {
+      const conditions: SQL[] = [];
+
+      // Filter by role
+      if (role) {
+        conditions.push(eq(backofficeUsers.role, role as any));
+      }
+
+      // Search by name or email
+      if (search) {
+        conditions.push(
+          or(
+            ilike(backofficeUsers.firstName, `%${search}%`),
+            ilike(backofficeUsers.lastName, `%${search}%`),
+            ilike(backofficeUsers.email, `%${search}%`)
+          )!
+        );
+      }
+
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+      // Count total
+      const [{ totalCount }] = await db
+        .select({ totalCount: count() })
+        .from(backofficeUsers)
+        .where(whereClause);
+
+      // Fetch users with pagination
       const users = await db
         .select({
           id: backofficeUsers.id,
@@ -31,7 +75,10 @@ export default async function (fastify: FastifyInstance) {
           createdAt: backofficeUsers.createdAt,
         })
         .from(backofficeUsers)
-        .orderBy(desc(backofficeUsers.createdAt));
+        .where(whereClause)
+        .orderBy(desc(backofficeUsers.createdAt))
+        .limit(limit)
+        .offset(offset);
 
       // Fetch assignments for each user
       const usersWithAssignments = await Promise.all(
@@ -48,10 +95,18 @@ export default async function (fastify: FastifyInstance) {
             ...user,
             assignedEventIds: assignments.map((a) => a.eventId),
           };
-        }),
+        })
       );
 
-      return reply.send({ users: usersWithAssignments });
+      return reply.send({
+        users: usersWithAssignments,
+        pagination: {
+          page,
+          limit,
+          total: totalCount,
+          totalPages: Math.ceil(totalCount / limit),
+        },
+      });
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: "Failed to fetch users" });
