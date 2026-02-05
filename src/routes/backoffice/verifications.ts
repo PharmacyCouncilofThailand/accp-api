@@ -40,8 +40,8 @@ export default async function (fastify: FastifyInstance) {
 
       // Filter by status (map to db status)
       if (status) {
-        const dbStatus = status === "approved" ? "active" : status;
-        conditions.push(eq(users.status, dbStatus));
+        const dbStatus = status === "approved" ? "active" : status === "pending" ? "pending_approval" : status;
+        conditions.push(eq(users.status, dbStatus as any));
       }
 
       // Search by name, email, id, or registration code

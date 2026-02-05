@@ -39,7 +39,7 @@ export default async function (fastify: FastifyInstance) {
 
       // Filter by role
       if (role) {
-        conditions.push(eq(backofficeUsers.role, role));
+        conditions.push(eq(backofficeUsers.role, role as any));
       }
 
       // Search by name or email
