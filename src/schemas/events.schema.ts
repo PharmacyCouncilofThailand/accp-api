@@ -39,6 +39,9 @@ export const createSessionSchema = z.object({
 
 export const updateSessionSchema = createSessionSchema.partial();
 
+// Canonical role values matching the DB user_role enum
+export const VALID_TICKET_ROLES = ["thstd", "thpro", "interstd", "interpro"] as const;
+
 // Create Ticket Type Schema
 export const createTicketTypeSchema = z.object({
     category: z.enum(["primary", "addon"]),
@@ -48,10 +51,23 @@ export const createTicketTypeSchema = z.object({
     sessionIds: z.array(z.number().int()).optional(), // Multi-session linking
     price: z.preprocess((val) => typeof val === 'string' && val.trim() === '' ? 0 : Number(val), z.number().min(0)),
     currency: z.string().max(3).default("THB"),
-    allowedRoles: z.string().optional(),
+    allowedRoles: z.string().optional().refine(
+        (val) => {
+            if (!val) return true; // optional — no value is OK
+            try {
+                const roles = JSON.parse(val);
+                if (!Array.isArray(roles)) return false;
+                return roles.every((r: string) => VALID_TICKET_ROLES.includes(r as any));
+            } catch {
+                return false;
+            }
+        },
+        { message: `allowedRoles must be a JSON array of valid roles: ${VALID_TICKET_ROLES.join(", ")}` }
+    ),
     quota: z.number().int().positive(),
     saleStartDate: z.string().datetime().optional(),
     saleEndDate: z.string().datetime().optional(),
+    displayOrder: z.number().int().min(0).default(0),
 });
 
 export const updateTicketTypeSchema = createTicketTypeSchema.partial();

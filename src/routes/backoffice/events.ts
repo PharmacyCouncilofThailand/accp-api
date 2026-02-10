@@ -717,6 +717,7 @@ export default async function (fastify: FastifyInstance) {
             currency: data.currency,
             allowedRoles: data.allowedRoles,
             quota: data.quota,
+            displayOrder: data.displayOrder,
             saleStartDate: data.saleStartDate
               ? new Date(data.saleStartDate)
               : null,
