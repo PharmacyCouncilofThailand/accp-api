@@ -68,6 +68,14 @@ export const createTicketTypeSchema = z.object({
     saleStartDate: z.string().datetime().optional(),
     saleEndDate: z.string().datetime().optional(),
     displayOrder: z.number().int().min(0).default(0),
+    description: z.string().optional(),
+    originalPrice: z.preprocess(
+        (val) => val === "" || val === null || val === undefined ? undefined : Number(val),
+        z.number().min(0).optional()
+    ),
+    features: z.array(z.string()).optional().default([]),
+    badgeText: z.string().max(50).optional(),
+    isActive: z.boolean().optional(),
 });
 
 export const updateTicketTypeSchema = createTicketTypeSchema.partial();

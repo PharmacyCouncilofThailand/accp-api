@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
 import { ticketTypes, events, staffEventAssignments, ticketSessions } from "../../database/schema.js";
-import { eq, desc, ilike, and, count, inArray } from "drizzle-orm";
+import { eq, desc, ilike, and, count, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 
 const ticketQuerySchema = z.object({
@@ -62,7 +62,15 @@ export default async function (fastify: FastifyInstance) {
                 );
             }
             if (category) conditions.push(eq(ticketTypes.category, category));
-            if (role) conditions.push(ilike(ticketTypes.allowedRoles, `%${role}%`));
+            if (role) conditions.push(
+                or(
+                    eq(ticketTypes.allowedRoles, role),
+                    sql`${ticketTypes.allowedRoles} LIKE ${role + ',%'}`,
+                    sql`${ticketTypes.allowedRoles} LIKE ${'%,' + role + ',%'}`,
+                    sql`${ticketTypes.allowedRoles} LIKE ${'%,' + role}`,
+                    sql`${ticketTypes.allowedRoles} LIKE ${`%"${role}"%`}`
+                ) as any
+            );
 
             const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 

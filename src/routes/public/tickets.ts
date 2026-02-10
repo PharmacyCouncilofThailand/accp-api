@@ -45,8 +45,28 @@ export default async function publicTicketsRoutes(fastify: FastifyInstance) {
             const { role } = request.query as TicketQuery;
             const now = new Date();
 
-            // Build base query
-            let query = db
+            // Build conditions
+            const conditions = [
+                eq(events.status, "published"),
+                eq(ticketTypes.isActive, true),
+            ];
+
+            // Filter by role if provided
+            // DB stores allowedRoles as CSV ('thstd,thpro') or JSON ('["thstd"]')
+            if (role) {
+                conditions.push(
+                    or(
+                        isNull(ticketTypes.allowedRoles),
+                        eq(ticketTypes.allowedRoles, role),
+                        sql`${ticketTypes.allowedRoles} LIKE ${role + ',%'}`,
+                        sql`${ticketTypes.allowedRoles} LIKE ${'%,' + role + ',%'}`,
+                        sql`${ticketTypes.allowedRoles} LIKE ${'%,' + role}`,
+                        sql`${ticketTypes.allowedRoles} LIKE ${`%"${role}"%`}`
+                    ) as any
+                );
+            }
+
+            const tickets = await db
                 .select({
                     id: ticketTypes.id,
                     eventId: ticketTypes.eventId,
@@ -68,25 +88,8 @@ export default async function publicTicketsRoutes(fastify: FastifyInstance) {
                 })
                 .from(ticketTypes)
                 .innerJoin(events, eq(ticketTypes.eventId, events.id))
-                .where(
-                    and(
-                        eq(events.status, "published"),
-                        eq(ticketTypes.isActive, true)
-                    )
-                )
+                .where(and(...conditions))
                 .orderBy(ticketTypes.displayOrder);
-
-            // Filter by role if provided
-            if (role) {
-                query = query.where(
-                    or(
-                        isNull(ticketTypes.allowedRoles),
-                        sql`${ticketTypes.allowedRoles} ILIKE ${`%${role}%`}`
-                    )
-                ) as typeof query;
-            }
-
-            const tickets = await query;
 
             // Compute availability and format response
             const formattedTickets: TicketWithAvailability[] = tickets.map(ticket => {
@@ -100,6 +103,7 @@ export default async function publicTicketsRoutes(fastify: FastifyInstance) {
 
                 return {
                     ...ticket,
+                    displayOrder: ticket.displayOrder ?? 0,
                     features: ticket.features || [],
                     isAvailable,
                     saleStartDate: ticket.saleStartDate?.toISOString() || null,

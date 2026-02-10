@@ -28,6 +28,25 @@ import type {
   TicketTypeUpdatePayload,
 } from "../../types/index.js";
 
+/**
+ * Normalize allowedRoles to CSV format for consistent DB storage.
+ * Handles: JSON array string '["thstd","thpro"]' → 'thstd,thpro'
+ *          Already CSV 'thstd,thpro' → 'thstd,thpro'
+ *          undefined/null → undefined
+ */
+function normalizeAllowedRoles(raw: string | undefined | null): string | undefined {
+  if (!raw) return undefined;
+  if (raw.startsWith("[")) {
+    try {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr.join(",");
+    } catch {
+      // not valid JSON, return as-is
+    }
+  }
+  return raw;
+}
+
 export default async function (fastify: FastifyInstance) {
   // ============================================================================
   // EVENTS CRUD
@@ -715,13 +734,21 @@ export default async function (fastify: FastifyInstance) {
             sessionId: data.sessionId, // Keep for backward compat
             price: String(data.price),
             currency: data.currency,
-            allowedRoles: data.allowedRoles,
+            allowedRoles: normalizeAllowedRoles(data.allowedRoles),
             quota: data.quota,
             displayOrder: data.displayOrder,
             saleStartDate: data.saleStartDate
               ? new Date(data.saleStartDate)
               : null,
             saleEndDate: data.saleEndDate ? new Date(data.saleEndDate) : null,
+            description: data.description,
+            originalPrice:
+              data.originalPrice != null
+                ? String(data.originalPrice)
+                : null,
+            features: data.features,
+            badgeText: data.badgeText,
+            isActive: data.isActive ?? true,
           })
           .returning();
 
@@ -767,6 +794,15 @@ export default async function (fastify: FastifyInstance) {
     const data = result.data;
     const updates: Record<string, unknown> = { ...data };
 
+    // Remove fields that aren't direct DB columns
+    delete updates.sessionIds;
+    delete updates.sessionId;
+
+    if (data.allowedRoles !== undefined) updates.allowedRoles = normalizeAllowedRoles(data.allowedRoles);
+    if (data.price !== undefined) updates.price = String(data.price);
+    if (data.originalPrice !== undefined)
+      updates.originalPrice =
+        data.originalPrice != null ? String(data.originalPrice) : null;
     if (data.saleStartDate)
       updates.saleStartDate = new Date(data.saleStartDate);
     if (data.saleEndDate) updates.saleEndDate = new Date(data.saleEndDate);
