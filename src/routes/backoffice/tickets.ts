@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
 import { ticketTypes, events, staffEventAssignments, ticketSessions } from "../../database/schema.js";
-import { eq, desc, ilike, and, count, inArray, sql } from "drizzle-orm";
+import { eq, desc, ilike, and, or, count, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 
 const ticketQuerySchema = z.object({
