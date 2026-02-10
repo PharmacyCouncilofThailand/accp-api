@@ -5,85 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1768192347240,
-      "tag": "0000_bent_metal_master",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1768221785419,
-      "tag": "0001_wild_stick",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1768229006296,
-      "tag": "0002_nostalgic_vulture",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1768359619680,
-      "tag": "0003_mature_gambit",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1768362018181,
-      "tag": "0004_slimy_mister_fear",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1769505230927,
-      "tag": "0005_easy_nocturne",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1769588711578,
-      "tag": "0006_secret_nightshade",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1769765215955,
-      "tag": "0007_amazing_puppet_master",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1770087968523,
-      "tag": "0008_lyrical_mongoose",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1770102425283,
-      "tag": "0009_silent_sway",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
-      "when": 1770131569249,
-      "tag": "0010_volatile_crusher_hogan",
-      "breakpoints": true
-    },
-    {
-      "idx": 11,
-      "version": "7",
-      "when": 1770217000000,
-      "tag": "0011_add_performance_indexes",
+      "when": 1770628526998,
+      "tag": "0000_soft_donald_blake",
       "breakpoints": true
     }
   ]

@@ -252,6 +252,13 @@ export const ticketTypes = pgTable("ticket_types", {
   soldCount: integer("sold_count").notNull().default(0),
   saleStartDate: timestamp("sale_start_date"),
   saleEndDate: timestamp("sale_end_date"),
+  // Phase 1A: Additional columns for ticket display
+  description: text("description"),
+  originalPrice: decimal("original_price", { precision: 10, scale: 2 }),
+  features: jsonb("features").$type<string[]>().default([]),
+  badgeText: varchar("badge_text", { length: 50 }),
+  displayOrder: integer("display_order").default(0),
+  isActive: boolean("is_active").default(true),
 });
 
 // Junction table for many-to-many: Ticket <-> Sessions
