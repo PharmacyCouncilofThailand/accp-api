@@ -47,6 +47,41 @@ function normalizeAllowedRoles(raw: string | undefined | null): string | undefin
   return raw;
 }
 
+/**
+ * Priority weight map for auto-calculating displayOrder.
+ * Lower weight = higher priority = shown first on frontend.
+ */
+const PRIORITY_WEIGHT: Record<string, number> = {
+  early_bird: 100,
+  regular: 200,
+};
+
+/**
+ * Auto-calculate displayOrder from priority + saleStartDate.
+ * Formula: weight * 10000 + MMDD(saleStartDate)
+ *
+ * Example:
+ *   early_bird + Feb 01 → 100*10000 + 0201 = 1000201
+ *   early_bird + Feb 18 → 100*10000 + 0218 = 1000218
+ *   regular    + May 01 → 200*10000 + 0501 = 2000501
+ *
+ * Guarantees: EB always < Regular regardless of dates.
+ */
+function calculateDisplayOrder(
+  priority: string,
+  saleStartDate: string | Date | null | undefined,
+): number {
+  const weight = PRIORITY_WEIGHT[priority] ?? PRIORITY_WEIGHT.regular;
+
+  if (!saleStartDate) return weight * 10000;
+
+  const saleStart = saleStartDate instanceof Date ? saleStartDate : new Date(saleStartDate);
+  if (isNaN(saleStart.getTime())) return weight * 10000;
+
+  const mmdd = (saleStart.getMonth() + 1) * 100 + saleStart.getDate();
+  return weight * 10000 + mmdd;
+}
+
 export default async function (fastify: FastifyInstance) {
   // ============================================================================
   // EVENTS CRUD
@@ -729,6 +764,7 @@ export default async function (fastify: FastifyInstance) {
           .values({
             eventId: parseInt(eventId),
             category: data.category,
+            priority: data.priority || "regular",
             groupName: data.groupName,
             name: data.name,
             sessionId: data.sessionId, // Keep for backward compat
@@ -736,7 +772,7 @@ export default async function (fastify: FastifyInstance) {
             currency: data.currency,
             allowedRoles: normalizeAllowedRoles(data.allowedRoles),
             quota: data.quota,
-            displayOrder: data.displayOrder,
+            displayOrder: calculateDisplayOrder(data.priority || "regular", data.saleStartDate),
             saleStartDate: data.saleStartDate
               ? new Date(data.saleStartDate)
               : null,
@@ -806,6 +842,24 @@ export default async function (fastify: FastifyInstance) {
     if (data.saleStartDate)
       updates.saleStartDate = new Date(data.saleStartDate);
     if (data.saleEndDate) updates.saleEndDate = new Date(data.saleEndDate);
+
+    // Auto-recalculate displayOrder when priority or saleStartDate changes
+    if (data.priority !== undefined || data.saleStartDate !== undefined) {
+      const [existing] = await db
+        .select({
+          priority: ticketTypes.priority,
+          saleStartDate: ticketTypes.saleStartDate,
+        })
+        .from(ticketTypes)
+        .where(eq(ticketTypes.id, parseInt(ticketId)))
+        .limit(1);
+
+      if (existing) {
+        const newPriority = data.priority || existing.priority || "regular";
+        const newSaleStart = data.saleStartDate || existing.saleStartDate;
+        updates.displayOrder = calculateDisplayOrder(newPriority, newSaleStart);
+      }
+    }
 
     try {
       const updatedTicket = await db.transaction(async (tx) => {

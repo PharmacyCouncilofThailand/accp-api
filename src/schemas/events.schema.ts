@@ -42,9 +42,16 @@ export const updateSessionSchema = createSessionSchema.partial();
 // Canonical role values matching the DB user_role enum
 export const VALID_TICKET_ROLES = ["thstd", "thpro", "interstd", "interpro"] as const;
 
+// Valid ticket priorities
+export const VALID_TICKET_PRIORITIES = [
+  "early_bird",
+  "regular",
+] as const;
+
 // Create Ticket Type Schema
 export const createTicketTypeSchema = z.object({
     category: z.enum(["primary", "addon"]),
+    priority: z.enum(VALID_TICKET_PRIORITIES).default("regular"),
     groupName: z.string().max(100).optional(),
     name: z.string().min(1).max(100),
     sessionId: z.number().int().optional(), // Deprecated: use sessionIds
@@ -67,7 +74,7 @@ export const createTicketTypeSchema = z.object({
     quota: z.number().int().positive(),
     saleStartDate: z.string().datetime().optional(),
     saleEndDate: z.string().datetime().optional(),
-    displayOrder: z.number().int().min(0).default(0),
+    displayOrder: z.number().int().min(0).optional(),
     description: z.string().optional(),
     originalPrice: z.preprocess(
         (val) => val === "" || val === null || val === undefined ? undefined : Number(val),

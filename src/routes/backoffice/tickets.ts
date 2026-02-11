@@ -88,6 +88,7 @@ export default async function (fastify: FastifyInstance) {
                     groupName: ticketTypes.groupName,
                     name: ticketTypes.name,
                     category: ticketTypes.category,
+                    priority: ticketTypes.priority,
                     price: ticketTypes.price,
                     currency: ticketTypes.currency,
                     originalPrice: ticketTypes.originalPrice,

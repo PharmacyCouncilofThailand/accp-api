@@ -1,0 +1,2 @@
+CREATE TYPE "public"."ticket_priority" AS ENUM('super_early_bird', 'early_bird', 'regular', 'late', 'onsite');--> statement-breakpoint
+ALTER TABLE "ticket_types" ADD COLUMN "priority" "ticket_priority" DEFAULT 'regular' NOT NULL;

@@ -41,6 +41,10 @@ export const ticketCategoryEnum = pgEnum("ticket_category", [
   "primary",
   "addon",
 ]);
+export const ticketPriorityEnum = pgEnum("ticket_priority", [
+  "early_bird",
+  "regular",
+]);
 export const orderStatusEnum = pgEnum("order_status", [
   "pending",
   "paid",
@@ -242,6 +246,7 @@ export const ticketTypes = pgTable("ticket_types", {
     .notNull()
     .references(() => events.id),
   category: ticketCategoryEnum("category").notNull(),
+  priority: ticketPriorityEnum("priority").notNull().default("regular"),
   groupName: varchar("group_name", { length: 100 }),
   name: varchar("name", { length: 100 }).notNull(),
   sessionId: integer("session_id").references(() => sessions.id), // Deprecated: use ticketSessions for multi-session

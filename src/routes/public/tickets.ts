@@ -21,6 +21,7 @@ interface TicketWithAvailability {
     id: number;
     eventId: number;
     category: 'primary' | 'addon';
+    priority: string;
     groupName: string | null;
     name: string;
     description: string | null;
@@ -71,6 +72,7 @@ export default async function publicTicketsRoutes(fastify: FastifyInstance) {
                     id: ticketTypes.id,
                     eventId: ticketTypes.eventId,
                     category: ticketTypes.category,
+                    priority: ticketTypes.priority,
                     groupName: ticketTypes.groupName,
                     name: ticketTypes.name,
                     description: ticketTypes.description,
