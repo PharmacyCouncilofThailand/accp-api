@@ -5,6 +5,7 @@ import { loginBodySchema } from "../../schemas/auth.schema.js";
 import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { verifyRecaptcha, isRecaptchaEnabled } from "../../utils/recaptcha.js";
+import { JWT_EXPIRY } from "../../constants/auth.js";
 
 export default async function (fastify: FastifyInstance) {
   fastify.post("/login", async (request, reply) => {
@@ -106,9 +107,20 @@ export default async function (fastify: FastifyInstance) {
           delegateType = "unknown";
       }
 
-      // 6. Return user data
+      // 6. Sign JWT token
+      const token = fastify.jwt.sign(
+        {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+        },
+        { expiresIn: JWT_EXPIRY }
+      );
+
+      // 7. Return user data with token
       return reply.send({
         success: true,
+        token,
         user: {
           id: user.id,
           email: user.email,
@@ -116,7 +128,6 @@ export default async function (fastify: FastifyInstance) {
           lastName: user.lastName,
           role: user.role,
           country: user.country,
-          // Frontend specific fields
           delegateType,
           isThai: isThai,
           idCard: user.thaiIdCard,
@@ -124,7 +135,7 @@ export default async function (fastify: FastifyInstance) {
       });
 
     } catch (error) {
-      console.error("Login error:", error);
+      fastify.log.error(error);
       return reply.status(500).send({
         success: false,
         error: "Internal server error",

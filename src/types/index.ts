@@ -116,6 +116,12 @@ export interface JWTPayload {
   role: StaffRole;
 }
 
+export interface PublicJWTPayload {
+  id: number;
+  email: string;
+  role: UserRole;
+}
+
 // ============================================================================
 // Update Payload Types (for PATCH requests)
 // ============================================================================

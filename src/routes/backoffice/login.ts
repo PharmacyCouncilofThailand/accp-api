@@ -8,6 +8,7 @@ import {
 import { backofficeLoginSchema } from "../../schemas/backoffice.schema.js";
 import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
+import { JWT_EXPIRY } from "../../constants/auth.js";
 
 export default async function (fastify: FastifyInstance) {
   fastify.post("/login", async (request, reply) => {
@@ -96,7 +97,7 @@ export default async function (fastify: FastifyInstance) {
           assignedCategories: staff.assignedCategories || [],
           assignedPresentationTypes: staff.assignedPresentationTypes || [],
         },
-        { expiresIn: "7d" }
+        { expiresIn: JWT_EXPIRY }
       );
 
       // 7. Return

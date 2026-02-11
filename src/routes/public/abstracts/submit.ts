@@ -4,7 +4,6 @@ import { db } from "../../../database/index.js";
 import {
   abstracts,
   abstractCoAuthors,
-  users,
 } from "../../../database/schema.js";
 import {
   uploadToGoogleDrive,
@@ -62,7 +61,7 @@ export default async function (fastify: FastifyInstance) {
    * POST /api/abstracts/submit
    * * Accepts multipart/form-data with abstract information and PDF file
    */
-  fastify.post("/submit", {}, async (request, reply) => {
+  fastify.post("/submit", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     try {
       // Parse multipart form data
       const parts = request.parts();
@@ -205,18 +204,12 @@ export default async function (fastify: FastifyInstance) {
         });
       }
 
-      // Try to find user by email (if they registered before)
-      const [existingUser] = await db
-        .select()
-        .from(users)
-        .where(eq(users.email, email))
-        .limit(1);
-
       const finalEventId = eventId || DEFAULT_EVENT_ID;
 
-      // Prepare abstract data
+      // Prepare abstract data (userId from JWT token)
       const abstractData: any = {
         eventId: finalEventId,
+        userId: request.user.id,
         title,
         category,
         presentationType,
@@ -229,11 +222,6 @@ export default async function (fastify: FastifyInstance) {
         fullPaperUrl,
         status: "pending" as const,
       };
-
-      // Only add userId if user exists
-      if (existingUser) {
-        abstractData.userId = existingUser.id;
-      }
 
       // Insert abstract
       const [newAbstract] = await db

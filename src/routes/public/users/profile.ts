@@ -4,13 +4,11 @@ import { users } from "../../../database/schema.js";
 import { eq } from "drizzle-orm";
 
 /**
- * Get user profile by email
+ * Get current user's profile (JWT-protected)
  * This endpoint is used to autofill user data in forms
  */
 export default async function (fastify: FastifyInstance) {
-  fastify.get("/profile/:email", async (request, reply) => {
-    const { email } = request.params as { email: string };
-
+  fastify.get("/profile", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     try {
       const [user] = await db
         .select({
@@ -23,7 +21,7 @@ export default async function (fastify: FastifyInstance) {
           institution: users.institution,
         })
         .from(users)
-        .where(eq(users.email, email))
+        .where(eq(users.id, request.user.id))
         .limit(1);
 
       if (!user) {

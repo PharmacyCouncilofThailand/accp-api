@@ -25,8 +25,7 @@ const corsOrigins = process.env.CORS_ORIGIN
 
 fastify.register(cors, {
   origin: corsOrigins,
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-user-email'],
-  exposedHeaders: ['x-user-email'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 });
 
