@@ -8,12 +8,18 @@ import {
   payments,
   ticketTypes,
   registrations,
+  registrationSessions,
   users,
+  sessions,
+  ticketSessions,
 } from "../../database/schema.js";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, inArray, count } from "drizzle-orm";
 import { createPaymentIntentSchema } from "../../schemas/payment.schema.js";
 import type Stripe from "stripe";
 import { calculateStripeFee, resolveFeeMethod } from "../../utils/stripeFee.js";
+import { generateReceiptToken, verifyReceiptToken } from "../../utils/receiptToken.js";
+import { generateReceiptPdf } from "../../services/receiptPdf.js";
+import { sendPaymentReceiptEmail } from "../../services/emailService.js";
 
 // ─────────────────────────────────────────────────────
 // Helpers
@@ -99,10 +105,325 @@ async function resolveTicketId(
 }
 
 // ─────────────────────────────────────────────────────
+// Shared: process a successful payment
+// ─────────────────────────────────────────────────────
+
+/**
+ * Process a successful payment: create registrations for ALL items + update soldCount.
+ * Used by both webhook and verify endpoint.
+ * Returns { order, user } for email sending, or null if order not found.
+ */
+async function processSuccessfulPayment(
+  fastify: { log: { info: (...args: any[]) => void; error: (...args: any[]) => void } },
+  orderId: number,
+  paymentIntentId: string,
+  workshopSessionId: number | null,
+  receiptUrl: string | null,
+  paymentChannel: string,
+): Promise<{
+  order: { id: number; userId: number; orderNumber: string; totalAmount: string; currency: string; status: string };
+  user: { email: string; firstName: string; lastName: string };
+  regCode: string;
+} | null> {
+  return await db.transaction(async (tx) => {
+    // Update order status
+    const [order] = await tx
+      .select()
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .limit(1);
+
+    if (!order) return null;
+
+    if (order.status !== "paid") {
+      await tx
+        .update(orders)
+        .set({ status: "paid" })
+        .where(eq(orders.id, orderId));
+    }
+
+    // Update payment record
+    await tx
+      .update(payments)
+      .set({
+        status: "paid",
+        paymentChannel,
+        stripeReceiptUrl: receiptUrl,
+        paidAt: new Date(),
+      })
+      .where(eq(payments.stripeSessionId, paymentIntentId));
+
+    // Get user info
+    const [user] = await tx
+      .select({
+        email: users.email,
+        firstName: users.firstName,
+        lastName: users.lastName,
+      })
+      .from(users)
+      .where(eq(users.id, order.userId))
+      .limit(1);
+
+    if (!user) return null;
+
+    // Get order items
+    const items = await tx
+      .select({
+        id: orderItems.id,
+        itemType: orderItems.itemType,
+        ticketTypeId: orderItems.ticketTypeId,
+        price: orderItems.price,
+        quantity: orderItems.quantity,
+      })
+      .from(orderItems)
+      .where(eq(orderItems.orderId, orderId));
+
+    // Duplicate guard: check if registration already exists for this order
+    const existingRegCount = await tx
+      .select({ count: count() })
+      .from(registrations)
+      .where(eq(registrations.orderId, orderId));
+
+    if (existingRegCount[0].count > 0) {
+      fastify.log.info(`Registration already exists for order ${orderId}, skipping creation`);
+      const [existingReg] = await tx
+        .select({ regCode: registrations.regCode })
+        .from(registrations)
+        .where(eq(registrations.orderId, orderId))
+        .limit(1);
+      return { order: { ...order, status: "paid" as string }, user, regCode: existingReg?.regCode || "" };
+    }
+
+    // Find primary (ticket) item to get eventId
+    const primaryItem = items.find(i => i.itemType === "ticket");
+    const isAddonOnlyOrder = !primaryItem;
+
+    let registration: { id: number };
+    let regCode: string;
+    let eventId: number = 1;
+
+    if (isAddonOnlyOrder) {
+      // ── Addon-only order: use existing registration ────
+      const [existingReg] = await tx
+        .select({ id: registrations.id, regCode: registrations.regCode, eventId: registrations.eventId })
+        .from(registrations)
+        .where(
+          and(
+            eq(registrations.userId, order.userId),
+            eq(registrations.status, "confirmed")
+          )
+        )
+        .limit(1);
+
+      if (!existingReg) {
+        fastify.log.error(`Addon-only order ${orderId} but no existing registration for user ${order.userId}`);
+        return null;
+      }
+
+      registration = { id: existingReg.id };
+      regCode = existingReg.regCode;
+      eventId = existingReg.eventId;
+      fastify.log.info(`Addon-only order ${orderId}: using existing registration ${existingReg.id}`);
+    } else {
+      // ── Full order: create new registration ────────────
+      const [primaryTicket] = await tx
+        .select({ eventId: ticketTypes.eventId })
+        .from(ticketTypes)
+        .where(eq(ticketTypes.id, primaryItem.ticketTypeId))
+        .limit(1);
+
+      eventId = primaryTicket?.eventId || 1;
+      regCode = generateRegCode();
+      const [newReg] = await tx.insert(registrations).values({
+        regCode,
+        orderId,
+        eventId,
+        ticketTypeId: primaryItem.ticketTypeId,
+        userId: order.userId,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        status: "confirmed",
+      }).returning();
+
+      registration = { id: newReg.id };
+    }
+
+    // Create registration_sessions for each order item
+    let totalSessionLinks = 0;
+    for (const item of items) {
+      const [ticket] = await tx
+        .select({ groupName: ticketTypes.groupName })
+        .from(ticketTypes)
+        .where(eq(ticketTypes.id, item.ticketTypeId))
+        .limit(1);
+
+      // Determine which session(s) to link
+      let sessionIdsToLink: number[] = [];
+
+      if (
+        item.itemType === "addon" &&
+        ticket?.groupName?.toLowerCase() === "workshop" &&
+        workshopSessionId
+      ) {
+        // Workshop addon → user chose a specific session
+        sessionIdsToLink = [workshopSessionId];
+      } else {
+        // Primary or other addon → lookup sessions from ticketSessions junction
+        const linkedSessions = await tx
+          .select({ sessionId: ticketSessions.sessionId })
+          .from(ticketSessions)
+          .where(eq(ticketSessions.ticketTypeId, item.ticketTypeId));
+
+        sessionIdsToLink = linkedSessions.map(ls => ls.sessionId);
+
+        // Fallback for primary tickets: if no ticket_sessions rows, auto-link to main session(s)
+        if (sessionIdsToLink.length === 0 && item.itemType === "ticket") {
+          const mainSessions = await tx
+            .select({ id: sessions.id })
+            .from(sessions)
+            .where(
+              and(
+                eq(sessions.eventId, eventId),
+                eq(sessions.isMainSession, true)
+              )
+            );
+          sessionIdsToLink = mainSessions.map(s => s.id);
+
+          // Backfill ticket_sessions so future lookups work
+          if (sessionIdsToLink.length > 0) {
+            await tx.insert(ticketSessions).values(
+              sessionIdsToLink.map(sid => ({
+                ticketTypeId: item.ticketTypeId,
+                sessionId: sid,
+              }))
+            );
+            fastify.log.info(`Backfilled ticket_sessions for primary ticket ${item.ticketTypeId} → ${sessionIdsToLink.length} main sessions`);
+          }
+        }
+      }
+
+      // Insert registration_sessions rows
+      for (const sid of sessionIdsToLink) {
+        await tx.insert(registrationSessions).values({
+          registrationId: registration.id,
+          sessionId: sid,
+          ticketTypeId: item.ticketTypeId,
+        });
+        totalSessionLinks++;
+      }
+
+      // Update soldCount (unchanged)
+      await tx
+        .update(ticketTypes)
+        .set({
+          soldCount: sql`${ticketTypes.soldCount} + ${item.quantity}`,
+        })
+        .where(eq(ticketTypes.id, item.ticketTypeId));
+    }
+
+    fastify.log.info(`${isAddonOnlyOrder ? "Addon-only" : "Created 1 registration"} + ${totalSessionLinks} session links + updated soldCount for order ${orderId}`);
+
+    return { order: { ...order, status: "paid" as string }, user, regCode };
+  });
+}
+
+// ─────────────────────────────────────────────────────
 // Routes
 // ─────────────────────────────────────────────────────
 
 export default async function paymentRoutes(fastify: FastifyInstance) {
+  // ─────────────────────────────────────────────────────
+  // GET /payments/my-purchases (JWT protected)
+  // Returns what the current user has already purchased
+  // ─────────────────────────────────────────────────────
+  fastify.get(
+    "/my-purchases",
+    { preHandler: [fastify.authenticate] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const userId = request.user.id;
+
+      try {
+        // Find all paid orders for this user
+        const paidOrders = await db
+          .select({ id: orders.id })
+          .from(orders)
+          .where(and(eq(orders.userId, userId), eq(orders.status, "paid")));
+
+        if (paidOrders.length === 0) {
+          return reply.send({
+            success: true,
+            data: {
+              hasPrimaryTicket: false,
+              primaryTicketName: null,
+              regCode: null,
+              purchasedAddOns: [],
+            },
+          });
+        }
+
+        const paidOrderIds = paidOrders.map((o) => o.id);
+
+        // Get all order items from paid orders
+        const allItems = await db
+          .select({
+            itemType: orderItems.itemType,
+            ticketTypeId: orderItems.ticketTypeId,
+            ticketName: ticketTypes.name,
+            groupName: ticketTypes.groupName,
+            category: ticketTypes.category,
+          })
+          .from(orderItems)
+          .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+          .where(inArray(orderItems.orderId, paidOrderIds));
+
+        const hasPrimaryTicket = allItems.some((i) => i.category === "primary");
+        const primaryItem = allItems.find((i) => i.category === "primary");
+
+        // Get purchased addon groupNames (deduplicated)
+        const purchasedAddOns = [
+          ...new Set(
+            allItems
+              .filter((i) => i.category === "addon" && i.groupName)
+              .map((i) => i.groupName!.toLowerCase())
+          ),
+        ];
+
+        // Get regCode from registration
+        let regCode: string | null = null;
+        if (hasPrimaryTicket) {
+          const [reg] = await db
+            .select({ regCode: registrations.regCode })
+            .from(registrations)
+            .where(
+              and(
+                eq(registrations.userId, userId),
+                eq(registrations.status, "confirmed")
+              )
+            )
+            .limit(1);
+          regCode = reg?.regCode || null;
+        }
+
+        return reply.send({
+          success: true,
+          data: {
+            hasPrimaryTicket,
+            primaryTicketName: primaryItem?.ticketName || null,
+            regCode,
+            purchasedAddOns,
+          },
+        });
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({
+          success: false,
+          error: "Failed to fetch purchases",
+        });
+      }
+    }
+  );
+
   // ─────────────────────────────────────────────────────
   // POST /payments/create-intent (JWT protected)
   // ─────────────────────────────────────────────────────
@@ -120,37 +441,107 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const { packageId, addOnIds, currency, paymentMethod, promoCode } = parsed.data;
+      const { packageId, addOnIds, currency, paymentMethod, promoCode, workshopSessionId } = parsed.data;
       const userId = request.user.id;
+      const isAddonOnly = !packageId || packageId === "";
 
-      fastify.log.info(`[CREATE-INTENT] paymentMethod=${paymentMethod}, currency=${currency}, packageId=${packageId}`);
+      fastify.log.info(`[CREATE-INTENT] paymentMethod=${paymentMethod}, currency=${currency}, packageId=${packageId || "(addon-only)"}, isAddonOnly=${isAddonOnly}`);
 
       try {
-        // 2. Resolve primary ticket
-        const primaryTicket = await resolveTicketId(packageId, currency, "primary");
-        if (!primaryTicket) {
-          return reply.status(404).send({
-            success: false,
-            error: `No ${currency} ticket found for package "${packageId}"`,
-          });
+        // ── Duplicate / addon-only guard ─────────────────────
+        // Find user's existing paid orders
+        const existingPaidOrders = await db
+          .select({ id: orders.id })
+          .from(orders)
+          .where(and(eq(orders.userId, userId), eq(orders.status, "paid")));
+
+        let userHasPrimary = false;
+        const userPurchasedAddOns: string[] = [];
+
+        if (existingPaidOrders.length > 0) {
+          const paidOrderIds = existingPaidOrders.map((o) => o.id);
+          const existingItems = await db
+            .select({
+              category: ticketTypes.category,
+              groupName: ticketTypes.groupName,
+            })
+            .from(orderItems)
+            .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+            .where(inArray(orderItems.orderId, paidOrderIds));
+
+          userHasPrimary = existingItems.some((i) => i.category === "primary");
+          for (const item of existingItems) {
+            if (item.category === "addon" && item.groupName) {
+              userPurchasedAddOns.push(item.groupName.toLowerCase());
+            }
+          }
         }
 
-        // 3. Check availability
-        const [currentTicket] = await db
-          .select({ quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
-          .from(ticketTypes)
-          .where(eq(ticketTypes.id, primaryTicket.id))
-          .limit(1);
-
-        if (currentTicket && currentTicket.soldCount >= currentTicket.quota) {
+        // Block duplicate primary ticket purchase
+        if (!isAddonOnly && userHasPrimary) {
           return reply.status(400).send({
             success: false,
-            error: "Ticket sold out",
+            error: "You already have a registration ticket for this event. Use add-on purchase instead.",
+            code: "DUPLICATE_PRIMARY",
           });
         }
 
-        // 4. Calculate total
-        let totalAmount = Number(primaryTicket.price);
+        // Addon-only requires existing primary ticket
+        if (isAddonOnly && !userHasPrimary) {
+          return reply.status(400).send({
+            success: false,
+            error: "You must purchase a registration ticket before buying add-ons.",
+            code: "NO_PRIMARY_TICKET",
+          });
+        }
+
+        // Addon-only requires at least one addon
+        if (isAddonOnly && addOnIds.length === 0) {
+          return reply.status(400).send({
+            success: false,
+            error: "Please select at least one add-on.",
+          });
+        }
+
+        // Block duplicate addon purchase
+        for (const addOnId of addOnIds) {
+          if (userPurchasedAddOns.includes(addOnId.toLowerCase())) {
+            return reply.status(400).send({
+              success: false,
+              error: `You already purchased the "${addOnId}" add-on.`,
+              code: "DUPLICATE_ADDON",
+            });
+          }
+        }
+
+        // ── Resolve primary ticket (if not addon-only) ──────
+        let primaryTicket: { id: number; price: string; eventId: number } | null = null;
+        if (!isAddonOnly) {
+          primaryTicket = await resolveTicketId(packageId, currency, "primary");
+          if (!primaryTicket) {
+            return reply.status(404).send({
+              success: false,
+              error: `No ${currency} ticket found for package "${packageId}"`,
+            });
+          }
+
+          // Check availability
+          const [currentTicket] = await db
+            .select({ quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
+            .from(ticketTypes)
+            .where(eq(ticketTypes.id, primaryTicket.id))
+            .limit(1);
+
+          if (currentTicket && currentTicket.soldCount >= currentTicket.quota) {
+            return reply.status(400).send({
+              success: false,
+              error: "Ticket sold out",
+            });
+          }
+        }
+
+        // ── Resolve add-ons ─────────────────────────────────
+        let totalAmount = primaryTicket ? Number(primaryTicket.price) : 0;
         const resolvedAddOns: { id: number; price: string; eventId: number }[] = [];
 
         for (const addOnId of addOnIds) {
@@ -158,6 +549,60 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           if (addon) {
             totalAmount += Number(addon.price);
             resolvedAddOns.push(addon);
+            fastify.log.info(`[CREATE-INTENT] Resolved addon "${addOnId}" → ticketTypeId=${addon.id}, price=${addon.price}`);
+          } else {
+            fastify.log.info(`[CREATE-INTENT] Could not resolve addon "${addOnId}" for currency=${currency}`);
+          }
+        }
+        fastify.log.info(`[CREATE-INTENT] addOnIds=${JSON.stringify(addOnIds)}, resolved=${resolvedAddOns.length}, total=${totalAmount}`);
+
+        // ── Validate workshop session if provided ───────────
+        if (workshopSessionId && addOnIds.includes("workshop")) {
+          const workshopTicketIds = resolvedAddOns.map((a) => a.id);
+          if (workshopTicketIds.length > 0) {
+            const [linked] = await db
+              .select({ id: ticketSessions.id })
+              .from(ticketSessions)
+              .innerJoin(sessions, eq(ticketSessions.sessionId, sessions.id))
+              .where(
+                and(
+                  inArray(ticketSessions.ticketTypeId, workshopTicketIds),
+                  eq(ticketSessions.sessionId, workshopSessionId),
+                  eq(sessions.isActive, true)
+                )
+              )
+              .limit(1);
+
+            if (!linked) {
+              return reply.status(400).send({
+                success: false,
+                error: "Invalid workshop session selection",
+              });
+            }
+
+            // Check session capacity
+            const [enrollCount] = await db
+              .select({ count: count() })
+              .from(registrations)
+              .where(
+                and(
+                  eq(registrations.sessionId, workshopSessionId),
+                  eq(registrations.status, "confirmed")
+                )
+              );
+
+            const [sessionData] = await db
+              .select({ maxCapacity: sessions.maxCapacity })
+              .from(sessions)
+              .where(eq(sessions.id, workshopSessionId))
+              .limit(1);
+
+            if (sessionData?.maxCapacity && enrollCount.count >= sessionData.maxCapacity) {
+              return reply.status(400).send({
+                success: false,
+                error: "Selected workshop session is full",
+              });
+            }
           }
         }
 
@@ -185,13 +630,15 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           .returning();
 
         // 8. Create OrderItems
-        await db.insert(orderItems).values({
-          orderId: order.id,
-          itemType: "ticket",
-          ticketTypeId: primaryTicket.id,
-          price: primaryTicket.price,
-          quantity: 1,
-        });
+        if (primaryTicket) {
+          await db.insert(orderItems).values({
+            orderId: order.id,
+            itemType: "ticket",
+            ticketTypeId: primaryTicket.id,
+            price: primaryTicket.price,
+            quantity: 1,
+          });
+        }
 
         for (const addon of resolvedAddOns) {
           await db.insert(orderItems).values({
@@ -212,15 +659,20 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         }
 
         // Build detailed description for Stripe receipt
-        const ticketIds = [primaryTicket.id, ...resolvedAddOns.map(a => a.id)];
+        const ticketIds = [
+          ...(primaryTicket ? [primaryTicket.id] : []),
+          ...resolvedAddOns.map(a => a.id),
+        ];
         const ticketNames = await db
           .select({ id: ticketTypes.id, name: ticketTypes.name })
           .from(ticketTypes)
           .where(sql`${ticketTypes.id} IN (${sql.join(ticketIds.map(id => sql`${id}`), sql`, `)})`);
         const nameMap = new Map(ticketNames.map(t => [t.id, t.name]));
 
-        const descLines = [`ACCP2026 - Order ${orderNumber}`];
-        descLines.push(`• ${nameMap.get(primaryTicket.id) || packageId}: ${currency === "THB" ? "฿" : "$"}${Number(primaryTicket.price).toLocaleString()}`);
+        const descLines = [`ACCP2026 - Order ${orderNumber}${isAddonOnly ? " (Add-on)" : ""}`];
+        if (primaryTicket) {
+          descLines.push(`• ${nameMap.get(primaryTicket.id) || packageId}: ${currency === "THB" ? "฿" : "$"}${Number(primaryTicket.price).toLocaleString()}`);
+        }
         for (const addon of resolvedAddOns) {
           descLines.push(`• ${nameMap.get(addon.id) || "Add-on"}: ${currency === "THB" ? "฿" : "$"}${Number(addon.price).toLocaleString()}`);
         }
@@ -240,11 +692,13 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               orderId: String(order.id),
               orderNumber,
               userId: String(userId),
-              packageId,
+              packageId: packageId || "",
               addOnIds: addOnIds.join(",") || "",
+              isAddonOnly: isAddonOnly ? "true" : "false",
               netAmount: String(totalAmount),
               fee: String(feeBreakdown.fee),
               feeMethod,
+              workshopSessionId: workshopSessionId ? String(workshopSessionId) : "",
             },
             description: descLines.join("\n"),
           },
@@ -356,88 +810,74 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             }
           }
 
-          await db.transaction(async (tx) => {
-            // Update order status
-            await tx
-              .update(orders)
-              .set({ status: "paid" })
-              .where(eq(orders.id, orderId));
+          // Read workshopSessionId from metadata
+          const workshopSessionId = paymentIntent.metadata.workshopSessionId
+            ? parseInt(paymentIntent.metadata.workshopSessionId)
+            : null;
 
-            // Update payment record
-            await tx
-              .update(payments)
-              .set({
-                status: "paid",
-                paymentChannel:
-                  paymentIntent.payment_method_types?.[0] || "card",
-                stripeReceiptUrl: receiptUrl,
-                paidAt: new Date(),
-              })
-              .where(eq(payments.stripeSessionId, paymentIntent.id));
+          const paymentChannel = paymentIntent.payment_method_types?.[0] || "card";
 
-            // Get order + user for registration
-            const [order] = await tx
-              .select()
-              .from(orders)
-              .where(eq(orders.id, orderId))
-              .limit(1);
+          // Process payment: create registrations for ALL items + update soldCount
+          const txResult = await processSuccessfulPayment(
+            fastify,
+            orderId,
+            paymentIntent.id,
+            workshopSessionId,
+            receiptUrl,
+            paymentChannel,
+          );
 
-            if (!order) return;
-
-            const [user] = await tx
-              .select({
-                email: users.email,
-                firstName: users.firstName,
-                lastName: users.lastName,
-              })
-              .from(users)
-              .where(eq(users.id, order.userId))
-              .limit(1);
-
-            if (!user) return;
-
-            // Get order items
-            const items = await tx
-              .select()
-              .from(orderItems)
-              .where(eq(orderItems.orderId, orderId));
-
-            // Create registration for primary ticket
-            const primaryItem = items.find((i) => i.itemType === "ticket");
-            if (primaryItem) {
-              // Get eventId from ticket
-              const [ticket] = await tx
-                .select({ eventId: ticketTypes.eventId })
-                .from(ticketTypes)
-                .where(eq(ticketTypes.id, primaryItem.ticketTypeId))
-                .limit(1);
-
-              const regCode = generateRegCode();
-
-              await tx.insert(registrations).values({
-                regCode,
-                eventId: ticket?.eventId || 1,
-                ticketTypeId: primaryItem.ticketTypeId,
-                userId: order.userId,
-                email: user.email,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                status: "confirmed",
-              });
-            }
-
-            // Update soldCount for all ticket types
-            for (const item of items) {
-              await tx
-                .update(ticketTypes)
-                .set({
-                  soldCount: sql`${ticketTypes.soldCount} + ${item.quantity}`,
+          // Send receipt + confirmation emails (fire-and-forget)
+          if (txResult) {
+            const { order, user, regCode } = txResult;
+            try {
+              const emailItems = await db
+                .select({
+                  name: ticketTypes.name,
+                  type: orderItems.itemType,
+                  price: orderItems.price,
+                  quantity: orderItems.quantity,
                 })
-                .where(eq(ticketTypes.id, item.ticketTypeId));
-            }
-          });
+                .from(orderItems)
+                .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+                .where(eq(orderItems.orderId, orderId));
 
-          // TODO: Send confirmation email via NipaMail (emailService.ts)
+              const emailSubtotal = emailItems.reduce(
+                (sum, item) => sum + Number(item.price) * item.quantity, 0
+              );
+              const emailTotal = Number(order.totalAmount);
+              const emailFee = Math.round((emailTotal - emailSubtotal) * 100) / 100;
+
+              const receiptToken = generateReceiptToken(orderId);
+              const apiBaseUrl = process.env.API_BASE_URL || `http://localhost:3002`;
+              const receiptDownloadUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
+
+              await sendPaymentReceiptEmail(
+                user.email,
+                user.firstName,
+                user.lastName,
+                order.orderNumber,
+                new Date(),
+                paymentChannel,
+                emailItems.map((i) => ({
+                  name: i.name,
+                  type: i.type,
+                  price: Number(i.price),
+                })),
+                emailSubtotal,
+                emailFee,
+                emailTotal,
+                order.currency,
+                receiptDownloadUrl,
+                regCode
+              );
+
+            } catch (emailErr) {
+              // Email failure should not fail the webhook
+              fastify.log.error(`Failed to send receipt email for order ${orderId}: ${emailErr}`);
+            }
+          }
+
           fastify.log.info(`Payment succeeded for order ${orderId}`);
           break;
         }
@@ -526,6 +966,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           id: orders.id,
           userId: orders.userId,
           orderNumber: orders.orderNumber,
+          totalAmount: orders.totalAmount,
+          currency: orders.currency,
           status: orders.status,
         })
         .from(orders)
@@ -538,6 +980,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
 
       let orderStatus = order.status;
       let paymentData = payment;
+      let justTransitionedToPaid = false;
+      let verifyRegCode = "";
 
       // If still pending, verify with Stripe API
       if (payment.status === "pending") {
@@ -554,18 +998,30 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               } catch { /* non-critical */ }
             }
 
-            await db.update(orders).set({ status: "paid" }).where(eq(orders.id, order.id));
-            await db.update(payments).set({
-              status: "paid",
-              paymentChannel: pi.payment_method_types?.[0] || "card",
-              stripeReceiptUrl: receiptUrl,
-              paidAt: new Date(),
-            }).where(eq(payments.stripeSessionId, piId));
+            // Read workshopSessionId from metadata
+            const workshopSessionId = pi.metadata.workshopSessionId
+              ? parseInt(pi.metadata.workshopSessionId)
+              : null;
 
-            orderStatus = "paid";
-            paymentData = { ...paymentData, status: "paid", paymentChannel: pi.payment_method_types?.[0] || "card", stripeReceiptUrl: receiptUrl, paidAt: new Date() };
+            const verifyPaymentChannel = pi.payment_method_types?.[0] || "card";
 
-            fastify.log.info(`[VERIFY] Updated order ${order.id} to paid`);
+            // Process payment: create registrations for ALL items + update soldCount
+            const verifyResult = await processSuccessfulPayment(
+              fastify,
+              order.id,
+              piId,
+              workshopSessionId,
+              receiptUrl,
+              verifyPaymentChannel,
+            );
+
+            if (verifyResult) {
+              orderStatus = "paid";
+              paymentData = { ...paymentData, status: "paid", paymentChannel: verifyPaymentChannel, stripeReceiptUrl: receiptUrl, paidAt: new Date() };
+              justTransitionedToPaid = true;
+              verifyRegCode = verifyResult.regCode;
+              fastify.log.info(`[VERIFY] Updated order ${order.id} to paid`);
+            }
           } else if (pi.status === "canceled" || pi.status === "requires_payment_method") {
             await db.update(orders).set({ status: "cancelled" }).where(eq(orders.id, order.id));
             await db.update(payments).set({ status: "failed" }).where(eq(payments.stripeSessionId, piId));
@@ -595,6 +1051,57 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
       const totalPaid = Number(paymentData.amount);
       const fee = Math.round((totalPaid - subtotal) * 100) / 100;
 
+      // Generate receipt download URL for paid orders
+      let receiptDownloadUrl: string | null = null;
+      if (orderStatus === "paid") {
+        const receiptToken = generateReceiptToken(order.id);
+        const apiBaseUrl = process.env.API_BASE_URL || "http://localhost:3002";
+        receiptDownloadUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
+      }
+
+      // Send receipt email if verify endpoint just transitioned the order to paid
+      if (justTransitionedToPaid) {
+        const [verifyUser] = await db
+          .select({
+            email: users.email,
+            firstName: users.firstName,
+            lastName: users.lastName,
+          })
+          .from(users)
+          .where(eq(users.id, order.userId))
+          .limit(1);
+
+        if (verifyUser && receiptDownloadUrl) {
+          // Fire-and-forget: don't block the response
+          (async () => {
+            try {
+              await sendPaymentReceiptEmail(
+                verifyUser.email,
+                verifyUser.firstName,
+                verifyUser.lastName,
+                order.orderNumber,
+                new Date(),
+                paymentData.paymentChannel || "card",
+                items.map((i) => ({
+                  name: i.ticketName,
+                  type: i.itemType,
+                  price: Number(i.price),
+                })),
+                subtotal,
+                fee > 0 ? fee : 0,
+                totalPaid,
+                order.currency,
+                receiptDownloadUrl!,
+                verifyRegCode
+              );
+
+            } catch (emailErr) {
+              fastify.log.error(`[VERIFY] Failed to send receipt email for order ${order.id}: ${emailErr}`);
+            }
+          })();
+        }
+      }
+
       return reply.send({
         success: true,
         data: {
@@ -608,6 +1115,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             stripeReceiptUrl: paymentData.stripeReceiptUrl,
             paymentChannel: paymentData.paymentChannel,
           },
+          receiptDownloadUrl,
           items: items.map(item => ({
             type: item.itemType,
             name: item.ticketName,
@@ -689,18 +1197,25 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               } catch { /* non-critical */ }
             }
 
-            // Update DB
-            await db.update(orders).set({ status: "paid" }).where(eq(orders.id, order.id));
-            await db.update(payments).set({
-              status: "paid",
-              paymentChannel: pi.payment_method_types?.[0] || "card",
-              stripeReceiptUrl: receiptUrl,
-              paidAt: new Date(),
-            }).where(eq(payments.stripeSessionId, payment.stripeSessionId));
+            // Read workshopSessionId from metadata
+            const wsSessionId = pi.metadata.workshopSessionId
+              ? parseInt(pi.metadata.workshopSessionId)
+              : null;
+            const statusPaymentChannel = pi.payment_method_types?.[0] || "card";
+
+            // Process payment: create registrations + update soldCount
+            await processSuccessfulPayment(
+              fastify,
+              order.id,
+              payment.stripeSessionId!,
+              wsSessionId,
+              receiptUrl,
+              statusPaymentChannel,
+            );
 
             // Refresh response data
             orderStatus = "paid";
-            payment = { ...payment, status: "paid", paymentChannel: pi.payment_method_types?.[0] || "card", stripeReceiptUrl: receiptUrl, paidAt: new Date() };
+            payment = { ...payment, status: "paid", paymentChannel: statusPaymentChannel, stripeReceiptUrl: receiptUrl, paidAt: new Date() };
 
             fastify.log.info(`Fallback: updated order ${order.id} to paid via Stripe API check`);
           } else if (pi.status === "canceled") {
@@ -729,6 +1244,136 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           } : null,
         },
       });
+    }
+  );
+
+  // ─────────────────────────────────────────────────────
+  // GET /payments/receipt/:token (NO JWT — signed token auth)
+  // Downloads a PDF receipt generated on-the-fly
+  // ─────────────────────────────────────────────────────
+  fastify.get(
+    "/receipt/:token",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { token } = request.params as { token: string };
+
+      // 1. Verify signed token
+      const orderId = verifyReceiptToken(token);
+      if (orderId === null) {
+        return reply.status(401).send({
+          success: false,
+          error: "Invalid or malformed receipt token",
+        });
+      }
+
+      try {
+        // 2. Fetch order
+        const [order] = await db
+          .select({
+            id: orders.id,
+            orderNumber: orders.orderNumber,
+            totalAmount: orders.totalAmount,
+            currency: orders.currency,
+            status: orders.status,
+            userId: orders.userId,
+          })
+          .from(orders)
+          .where(eq(orders.id, orderId))
+          .limit(1);
+
+        if (!order) {
+          return reply.status(404).send({
+            success: false,
+            error: "Order not found",
+          });
+        }
+
+        if (order.status !== "paid") {
+          return reply.status(400).send({
+            success: false,
+            error: "Receipt is only available for paid orders",
+          });
+        }
+
+        // 3. Fetch payment info
+        const [payment] = await db
+          .select({
+            paidAt: payments.paidAt,
+            paymentChannel: payments.paymentChannel,
+          })
+          .from(payments)
+          .where(eq(payments.orderId, orderId))
+          .limit(1);
+
+        // 4. Fetch user info
+        const [user] = await db
+          .select({
+            email: users.email,
+            firstName: users.firstName,
+            lastName: users.lastName,
+          })
+          .from(users)
+          .where(eq(users.id, order.userId))
+          .limit(1);
+
+        if (!user) {
+          return reply.status(404).send({
+            success: false,
+            error: "User not found",
+          });
+        }
+
+        // 5. Fetch order items with ticket names
+        const items = await db
+          .select({
+            name: ticketTypes.name,
+            type: orderItems.itemType,
+            price: orderItems.price,
+            quantity: orderItems.quantity,
+          })
+          .from(orderItems)
+          .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+          .where(eq(orderItems.orderId, orderId));
+
+        // 6. Calculate fee
+        const subtotal = items.reduce(
+          (sum, item) => sum + Number(item.price) * item.quantity, 0
+        );
+        const total = Number(order.totalAmount);
+        const fee = Math.round((total - subtotal) * 100) / 100;
+
+        // 7. Generate PDF
+        const pdfStream = generateReceiptPdf({
+          orderNumber: order.orderNumber,
+          paidAt: payment?.paidAt || new Date(),
+          paymentChannel: payment?.paymentChannel || "card",
+          currency: order.currency,
+          items: items.map((i) => ({
+            name: i.name,
+            type: i.type as "ticket" | "addon",
+            price: Number(i.price),
+            quantity: i.quantity,
+          })),
+          subtotal,
+          fee: fee > 0 ? fee : 0,
+          total,
+          customerName: `${user.firstName} ${user.lastName}`,
+          customerEmail: user.email,
+        });
+
+        // 8. Stream PDF response
+        const filename = `ACCP2026-receipt-${order.orderNumber}.pdf`;
+        reply.header("Content-Type", "application/pdf");
+        reply.header("Content-Disposition", `attachment; filename="${filename}"`);
+        reply.header("Cache-Control", "private, max-age=3600");
+
+        return reply.send(pdfStream);
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({
+          success: false,
+          error: "Failed to generate receipt",
+        });
+      }
     }
   );
 }

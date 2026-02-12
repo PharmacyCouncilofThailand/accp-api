@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { ticketTypes, events } from "../../database/schema.js";
-import { eq, and, or, isNull, gt, sql } from "drizzle-orm";
+import { ticketTypes, events, ticketSessions, sessions, registrations, registrationSessions } from "../../database/schema.js";
+import { eq, and, or, isNull, gt, sql, inArray, count } from "drizzle-orm";
 
 // Query params interface
 interface TicketQuery {
@@ -14,6 +14,15 @@ interface TicketGroup {
     groupName: string;
     category: 'primary' | 'addon';
     tickets: TicketWithAvailability[];
+}
+
+// Linked session info
+interface LinkedSession {
+    sessionId: number;
+    sessionName: string;
+    maxCapacity: number;
+    enrolledCount: number;
+    isFull: boolean;
 }
 
 // Ticket with computed fields
@@ -37,6 +46,7 @@ interface TicketWithAvailability {
     isAvailable: boolean;
     saleStartDate: string | null;
     saleEndDate: string | null;
+    sessions?: LinkedSession[];
 }
 
 export default async function publicTicketsRoutes(fastify: FastifyInstance) {
@@ -119,6 +129,74 @@ export default async function publicTicketsRoutes(fastify: FastifyInstance) {
                 const isEnded = saleEnd ? now > saleEnd : false;
                 return !isEnded; // Keep only tickets that haven't ended
             });
+
+            // Fetch linked sessions for all tickets via ticketSessions junction
+            const ticketIds = filteredTickets.map(t => t.id);
+            if (ticketIds.length > 0) {
+                const linkedRows = await db
+                    .select({
+                        ticketTypeId: ticketSessions.ticketTypeId,
+                        sessionId: sessions.id,
+                        sessionName: sessions.sessionName,
+                        maxCapacity: sessions.maxCapacity,
+                    })
+                    .from(ticketSessions)
+                    .innerJoin(sessions, eq(ticketSessions.sessionId, sessions.id))
+                    .where(
+                        and(
+                            inArray(ticketSessions.ticketTypeId, ticketIds),
+                            eq(sessions.isActive, true)
+                        )
+                    );
+
+                if (linkedRows.length > 0) {
+                    // Count enrollment from registration_sessions junction
+                    const sessionIds = [...new Set(linkedRows.map(r => r.sessionId))];
+
+                    const enrollCounts = await db
+                        .select({
+                            sessionId: registrationSessions.sessionId,
+                            count: count(),
+                        })
+                        .from(registrationSessions)
+                        .innerJoin(registrations, eq(registrationSessions.registrationId, registrations.id))
+                        .where(
+                            and(
+                                inArray(registrationSessions.sessionId, sessionIds),
+                                eq(registrations.status, "confirmed")
+                            )
+                        )
+                        .groupBy(registrationSessions.sessionId);
+
+                    const enrollMap = new Map(
+                        enrollCounts.map(r => [r.sessionId, r.count])
+                    );
+
+                    // Attach sessions to tickets
+                    const ticketSessionMap = new Map<number, LinkedSession[]>();
+                    for (const row of linkedRows) {
+                        const enrolled = enrollMap.get(row.sessionId) || 0;
+                        const capacity = row.maxCapacity || 0;
+                        const session: LinkedSession = {
+                            sessionId: row.sessionId,
+                            sessionName: row.sessionName,
+                            maxCapacity: capacity,
+                            enrolledCount: enrolled,
+                            isFull: capacity > 0 && enrolled >= capacity,
+                        };
+                        const arr = ticketSessionMap.get(row.ticketTypeId) || [];
+                        arr.push(session);
+                        ticketSessionMap.set(row.ticketTypeId, arr);
+                    }
+
+                    for (const ticket of filteredTickets) {
+                        const linked = ticketSessionMap.get(ticket.id);
+                        if (linked && linked.length > 0) {
+                            ticket.sessions = linked;
+                        }
+                    }
+                }
+            }
 
             // Group tickets by groupName
             const groups = groupTicketsByGroup(filteredTickets);

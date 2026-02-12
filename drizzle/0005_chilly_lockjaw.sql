@@ -1,0 +1,3 @@
+ALTER TABLE "registration_sessions" ADD COLUMN "checked_in_at" timestamp;--> statement-breakpoint
+ALTER TABLE "registration_sessions" ADD COLUMN "checked_in_by" integer;--> statement-breakpoint
+ALTER TABLE "registration_sessions" ADD CONSTRAINT "registration_sessions_checked_in_by_backoffice_users_id_fk" FOREIGN KEY ("checked_in_by") REFERENCES "public"."backoffice_users"("id") ON DELETE no action ON UPDATE no action;

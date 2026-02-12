@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { sessions, events, ticketTypes, registrations, ticketSessions, eventSpeakers, speakers } from "../../database/schema.js";
+import { sessions, events, ticketTypes, registrations, registrationSessions, ticketSessions, eventSpeakers, speakers } from "../../database/schema.js";
 import { eq, desc, sql, and, count, inArray } from "drizzle-orm";
 
 export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
@@ -64,12 +64,33 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     .where(inArray(eventSpeakers.sessionId, workshopSessionIds))
                 : [];
 
-            // Get enrollment counts for each session
-            // First get ticket types for these sessions
+            // Get enrollment counts from registration_sessions junction
             const sessionIds = workshopSessions.map(s => s.id);
 
-            // Get ticket types that are linked to these sessions
-            // Get ticket types linked via ticketSessions (new way)
+            // Count confirmed registrations per session
+            const enrollmentMap = new Map<number, number>();
+            if (sessionIds.length > 0) {
+                const enrollCounts = await db
+                    .select({
+                        sessionId: registrationSessions.sessionId,
+                        count: count(),
+                    })
+                    .from(registrationSessions)
+                    .innerJoin(registrations, eq(registrationSessions.registrationId, registrations.id))
+                    .where(
+                        and(
+                            inArray(registrationSessions.sessionId, sessionIds),
+                            eq(registrations.status, "confirmed")
+                        )
+                    )
+                    .groupBy(registrationSessions.sessionId);
+
+                for (const r of enrollCounts) {
+                    enrollmentMap.set(r.sessionId, r.count);
+                }
+            }
+
+            // Get ticket types linked to these sessions (for pricing display)
             const linkedTicketTypes = sessionIds.length > 0
                 ? await db
                     .select({
@@ -102,46 +123,15 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     .where(inArray(ticketTypes.sessionId, sessionIds))
                 : [];
 
-            // Merge both
+            // Merge both for ticket display
             const sessionTicketTypes = [...linkedTicketTypes, ...legacyTicketTypes];
 
-            // Get registration counts per ticket type
-            const ticketTypeIds = sessionTicketTypes.map(t => t.ticketTypeId);
-
-            interface RegistrationCount {
-                ticketTypeId: number;
-                count: number;
-            }
-
-            let registrationCounts: RegistrationCount[] = [];
-            if (ticketTypeIds.length > 0) {
-                registrationCounts = await db
-                    .select({
-                        ticketTypeId: registrations.ticketTypeId,
-                        count: count(),
-                    })
-                    .from(registrations)
-                    .where(
-                        and(
-                            inArray(registrations.ticketTypeId, ticketTypeIds),
-                            eq(registrations.status, "confirmed")
-                        )
-                    )
-                    .groupBy(registrations.ticketTypeId);
-            }
-
-            // Build enrollment map: sessionId -> count
-            const enrollmentMap = new Map<number, number>();
+            // Build session tickets map and sale date map
             const saleDateMap = new Map<number, Date | null>();
             const sessionTicketsMap = new Map<number, typeof sessionTicketTypes>();
 
-
             for (const tt of sessionTicketTypes) {
                 if (tt.sessionId) {
-                    const regCount = registrationCounts.find(r => r.ticketTypeId === tt.ticketTypeId);
-                    const currentCount = enrollmentMap.get(tt.sessionId) || 0;
-                    enrollmentMap.set(tt.sessionId, currentCount + (regCount?.count || 0));
-
                     // Collect tickets for this session
                     const tickets = sessionTicketsMap.get(tt.sessionId) || [];
                     tickets.push(tt);

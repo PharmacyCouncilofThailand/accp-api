@@ -317,18 +317,38 @@ export const orders = pgTable("orders", {
 export const registrations = pgTable("registrations", {
   id: serial("id").primaryKey(),
   regCode: varchar("reg_code", { length: 50 }).notNull().unique(),
+  orderId: integer("order_id").references(() => orders.id),
   eventId: integer("event_id")
     .notNull()
     .references(() => events.id),
   ticketTypeId: integer("ticket_type_id")
     .notNull()
     .references(() => ticketTypes.id),
+  sessionId: integer("session_id").references(() => sessions.id), // DEPRECATED: use registration_sessions
   userId: integer("user_id").references(() => users.id),
   email: varchar("email", { length: 255 }).notNull(),
   firstName: varchar("first_name", { length: 100 }).notNull(),
   lastName: varchar("last_name", { length: 100 }).notNull(),
   dietaryRequirements: varchar("dietary_requirements", { length: 255 }),
   status: registrationStatusEnum("status").notNull().default("confirmed"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Junction table: 1 registration → N sessions (tracks which sessions a registrant has access to)
+export const registrationSessions = pgTable("registration_sessions", {
+  id: serial("id").primaryKey(),
+  registrationId: integer("registration_id")
+    .notNull()
+    .references(() => registrations.id, { onDelete: "cascade" }),
+  sessionId: integer("session_id")
+    .notNull()
+    .references(() => sessions.id),
+  ticketTypeId: integer("ticket_type_id")
+    .notNull()
+    .references(() => ticketTypes.id),
+  checkedInAt: timestamp("checked_in_at"),
+  checkedInBy: integer("checked_in_by")
+    .references(() => backofficeUsers.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -513,11 +533,14 @@ export type NewStaffEventAssignment = typeof staffEventAssignments.$inferInsert;
 export type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
 export type NewPasswordResetToken = typeof passwordResetTokens.$inferInsert;
 
+export type RegistrationSession = typeof registrationSessions.$inferSelect;
+export type NewRegistrationSession = typeof registrationSessions.$inferInsert;
+
 // --------------------------------------------------------------------------
 // 8. RELATIONS
 // --------------------------------------------------------------------------
 
-export const registrationsRelations = relations(registrations, ({ one }) => ({
+export const registrationsRelations = relations(registrations, ({ one, many }) => ({
   event: one(events, {
     fields: [registrations.eventId],
     references: [events.id],
@@ -526,9 +549,33 @@ export const registrationsRelations = relations(registrations, ({ one }) => ({
     fields: [registrations.ticketTypeId],
     references: [ticketTypes.id],
   }),
+  session: one(sessions, {
+    fields: [registrations.sessionId],
+    references: [sessions.id],
+  }),
+  order: one(orders, {
+    fields: [registrations.orderId],
+    references: [orders.id],
+  }),
   user: one(users, {
     fields: [registrations.userId],
     references: [users.id],
+  }),
+  registrationSessions: many(registrationSessions),
+}));
+
+export const registrationSessionsRelations = relations(registrationSessions, ({ one }) => ({
+  registration: one(registrations, {
+    fields: [registrationSessions.registrationId],
+    references: [registrations.id],
+  }),
+  session: one(sessions, {
+    fields: [registrationSessions.sessionId],
+    references: [sessions.id],
+  }),
+  ticketType: one(ticketTypes, {
+    fields: [registrationSessions.ticketTypeId],
+    references: [ticketTypes.id],
   }),
 }));
 
@@ -556,6 +603,7 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
     references: [events.id],
   }),
   eventSpeakers: many(eventSpeakers),
+  registrationSessions: many(registrationSessions),
 }));
 
 export const speakersRelations = relations(speakers, ({ many }) => ({

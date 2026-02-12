@@ -130,6 +130,59 @@ async function sendNipaMailEmail(
 }
 
 /**
+ * Send email via NipaMail API (raw HTML version)
+ */
+async function sendNipaMailHtml(
+  recipient: string,
+  subject: string,
+  html: string,
+  retryOnAuth: boolean = true
+): Promise<void> {
+  const token = await getAccessToken();
+
+  try {
+    await axios.post(
+      `${NIPAMAIL_API_URL}/v1/messages`,
+      {
+        type: "EMAIL",
+        message: {
+          sender: getSenderString(),
+          recipient: recipient,
+          subject: subject,
+          html: encodeToBase64(html),
+        },
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+  } catch (error: unknown) {
+    if (
+      retryOnAuth &&
+      axios.isAxiosError(error) &&
+      error.response?.status === 401
+    ) {
+      cachedToken = null;
+      return sendNipaMailHtml(recipient, subject, html, false);
+    }
+
+    if (axios.isAxiosError(error) && error.response) {
+      console.error(
+        "NipaMail send failed:",
+        JSON.stringify(error.response.data)
+      );
+      throw new Error(
+        `Email send failed: ${error.response.data?.message || error.response.status}`
+      );
+    }
+    throw error;
+  }
+}
+
+/**
  * Get the conference website URL
  */
 function getWebsiteUrl(): string {
@@ -575,6 +628,113 @@ Bangkok Thailand
     console.log(`Password reset email sent to ${email}`);
   } catch (error) {
     console.error("Error sending password reset email:", error);
+    throw error;
+  }
+}
+
+// ============================================
+// PAYMENT RECEIPT EMAIL
+// ============================================
+
+interface ReceiptEmailItem {
+  name: string;
+  type: string;
+  price: number;
+}
+
+/**
+ * Send payment receipt email with plain text + QR code image URL
+ * Called after successful payment (webhook)
+ */
+export async function sendPaymentReceiptEmail(
+  email: string,
+  firstName: string,
+  lastName: string,
+  orderNumber: string,
+  paidAt: Date,
+  paymentChannel: string,
+  items: ReceiptEmailItem[],
+  subtotal: number,
+  fee: number,
+  total: number,
+  currency: string,
+  receiptDownloadUrl: string,
+  regCode?: string
+): Promise<void> {
+  const contactEmail = getContactEmail();
+  const currencySymbol = currency === "THB" ? "\u0E3F" : "$";
+  const methodLabel = paymentChannel === "promptpay" ? "PromptPay (QR)" : "Credit/Debit Card";
+
+  const dateStr = paidAt.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const itemLines = items
+    .map((item) => `  - ${item.name}: ${currencySymbol}${item.price.toLocaleString()}`)
+    .join("\n");
+
+  const feeLineText = fee > 0
+    ? `  - Payment Processing Fee: ${currencySymbol}${fee.toLocaleString()}\n`
+    : "";
+
+  const websiteUrl = getWebsiteUrl();
+
+  // QR code section using external API URL
+  const qrUrl = regCode
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(regCode)}`
+    : "";
+
+  const plainText = `
+Dear ${firstName} ${lastName},
+
+Thank you for your registration and payment for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
+
+Your registration has been confirmed. Below is your payment summary:
+
+Order Number: ${orderNumber}
+Payment Date: ${dateStr}
+Payment Method: ${methodLabel}
+
+Items:
+${itemLines}
+${feeLineText}
+Total Paid: ${currencySymbol}${total.toLocaleString()}
+${regCode ? `\nRegistration Code: ${regCode}\nPresent this QR code at the event for check-in.` : ""}
+
+Download your receipt (PDF):
+${receiptDownloadUrl}
+
+For more information and details about the conference, go to ${websiteUrl}
+
+If you have any questions, please contact ${contactEmail}
+
+See you soon at ACCP 2026, Bangkok, Thailand.
+
+Sincerely,
+25th ACCP committee
+Bangkok Thailand
+  `.trim();
+
+  // Build HTML: plain text converted to <br> + QR code image from external URL
+  let htmlContent = plainText.replace(/\n/g, '<br>\n');
+
+  if (qrUrl && regCode) {
+    const qrHtml = `<br><div style="text-align:center;margin:20px 0;"><img src="${qrUrl}" alt="QR Code: ${regCode}" width="200" height="200" style="display:block;margin:0 auto;" /></div>`;
+    htmlContent = htmlContent.replace(
+      `Registration Code: ${regCode}`,
+      `Registration Code: <strong>${regCode}</strong>${qrHtml}`
+    );
+  }
+
+  try {
+    await sendNipaMailHtml(email, `Payment Receipt - ${orderNumber} | 25th ACCP 2026`, htmlContent);
+    console.log(`Payment receipt email sent to ${email} for order ${orderNumber}`);
+  } catch (error) {
+    console.error("Error sending payment receipt email:", error);
     throw error;
   }
 }

@@ -8,6 +8,7 @@ import {
   eventImages,
   staffEventAssignments,
   registrations,
+  registrationSessions,
   speakers,
   eventSpeakers,
 } from "../../database/schema.js";
@@ -643,20 +644,7 @@ export default async function (fastify: FastifyInstance) {
       };
 
       try {
-        // Get all ticket types for this session
-        const sessionTicketTypes = await db
-          .select({ id: ticketTypes.id })
-          .from(ticketTypes)
-          .where(eq(ticketTypes.sessionId, parseInt(sessionId)));
-
-        if (sessionTicketTypes.length === 0) {
-          // No ticket types for this session, return empty list
-          return reply.send({ enrollments: [], count: 0 });
-        }
-
-        const ticketTypeIds = sessionTicketTypes.map((t) => t.id);
-
-        // Get all registrations for these ticket types
+        // Query via registration_sessions junction table
         const enrollmentList = await db
           .select({
             id: registrations.id,
@@ -666,12 +654,18 @@ export default async function (fastify: FastifyInstance) {
             lastName: registrations.lastName,
             status: registrations.status,
             createdAt: registrations.createdAt,
-            ticketTypeId: registrations.ticketTypeId,
+            ticketTypeId: registrationSessions.ticketTypeId,
             ticketName: ticketTypes.name,
           })
-          .from(registrations)
-          .leftJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
-          .where(inArray(registrations.ticketTypeId, ticketTypeIds))
+          .from(registrationSessions)
+          .innerJoin(registrations, eq(registrationSessions.registrationId, registrations.id))
+          .leftJoin(ticketTypes, eq(registrationSessions.ticketTypeId, ticketTypes.id))
+          .where(
+            and(
+              eq(registrationSessions.sessionId, parseInt(sessionId)),
+              eq(registrations.status, "confirmed")
+            )
+          )
           .orderBy(desc(registrations.createdAt));
 
         return reply.send({
