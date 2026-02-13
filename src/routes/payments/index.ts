@@ -740,6 +740,82 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
   );
 
   // ─────────────────────────────────────────────────────
+  // POST /payments/cancel-intent (JWT protected)
+  // Cancels a pending PaymentIntent and marks order cancelled
+  // ─────────────────────────────────────────────────────
+  fastify.post(
+    "/cancel-intent",
+    { preHandler: [fastify.authenticate] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const { orderId } = request.body as { orderId: number };
+      const userId = request.user.id;
+
+      if (!orderId) {
+        return reply.status(400).send({ success: false, error: "orderId is required" });
+      }
+
+      try {
+        // Find the order and verify ownership
+        const [order] = await db
+          .select()
+          .from(orders)
+          .where(and(eq(orders.id, orderId), eq(orders.userId, userId)))
+          .limit(1);
+
+        if (!order) {
+          return reply.status(404).send({ success: false, error: "Order not found" });
+        }
+
+        if (order.status !== "pending") {
+          return reply.status(400).send({
+            success: false,
+            error: `Cannot cancel order with status "${order.status}"`,
+          });
+        }
+
+        // Find the payment record to get the Stripe PaymentIntent ID
+        const [payment] = await db
+          .select()
+          .from(payments)
+          .where(eq(payments.orderId, orderId))
+          .limit(1);
+
+        if (payment?.stripeSessionId) {
+          // Cancel the Stripe PaymentIntent
+          try {
+            await stripe.paymentIntents.cancel(payment.stripeSessionId);
+            fastify.log.info(`[CANCEL-INTENT] Cancelled PaymentIntent ${payment.stripeSessionId} for order ${orderId}`);
+          } catch (stripeErr: any) {
+            // If already cancelled or cannot be cancelled, log but continue
+            fastify.log.info(`[CANCEL-INTENT] Stripe cancel note: ${stripeErr.message}`);
+          }
+        }
+
+        // Update order status to cancelled
+        await db
+          .update(orders)
+          .set({ status: "cancelled" })
+          .where(eq(orders.id, orderId));
+
+        // Update payment status to cancelled
+        if (payment) {
+          await db
+            .update(payments)
+            .set({ status: "cancelled" })
+            .where(eq(payments.id, payment.id));
+        }
+
+        fastify.log.info(`[CANCEL-INTENT] Order ${orderId} cancelled by user ${userId}`);
+
+        return reply.send({ success: true, data: { orderId, status: "cancelled" } });
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({ success: false, error: "Failed to cancel payment" });
+      }
+    }
+  );
+
+  // ─────────────────────────────────────────────────────
   // POST /payments/webhook (NO JWT — Stripe calls this)
   // ─────────────────────────────────────────────────────
   fastify.post(
