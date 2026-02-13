@@ -556,6 +556,14 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         }
         fastify.log.info(`[CREATE-INTENT] addOnIds=${JSON.stringify(addOnIds)}, resolved=${resolvedAddOns.length}, total=${totalAmount}`);
 
+        // Workshop addon must always have exactly one selected session
+        if (addOnIds.includes("workshop") && !workshopSessionId) {
+          return reply.status(400).send({
+            success: false,
+            error: "Workshop session is required",
+          });
+        }
+
         // ── Validate workshop session if provided ───────────
         if (workshopSessionId && addOnIds.includes("workshop")) {
           const workshopTicketIds = resolvedAddOns.map((a) => a.id);
