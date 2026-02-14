@@ -13,7 +13,7 @@ import {
   sessions,
   ticketSessions,
 } from "../../database/schema.js";
-import { eq, and, sql, inArray, count } from "drizzle-orm";
+import { eq, and, sql, inArray, count, desc } from "drizzle-orm";
 import { createPaymentIntentSchema } from "../../schemas/payment.schema.js";
 import type Stripe from "stripe";
 import { calculateStripeFee, resolveFeeMethod } from "../../utils/stripeFee.js";
@@ -419,6 +419,137 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           success: false,
           error: "Failed to fetch purchases",
+        });
+      }
+    }
+  );
+
+  // ─────────────────────────────────────────────────────
+  // GET /payments/my-tickets (JWT protected)
+  // Returns DB-backed ticket data for My Tickets page
+  // ─────────────────────────────────────────────────────
+  fastify.get(
+    "/my-tickets",
+    { preHandler: [fastify.authenticate] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const userId = request.user.id;
+
+      try {
+        // Primary confirmed registration (single source of truth for ticket owner)
+        const [primaryRegistration] = await db
+          .select({
+            registrationId: registrations.id,
+            regCode: registrations.regCode,
+            status: registrations.status,
+            dietaryRequirements: registrations.dietaryRequirements,
+            purchasedAt: registrations.createdAt,
+            ticketName: ticketTypes.name,
+            ticketPriority: ticketTypes.priority,
+            ticketPrice: ticketTypes.price,
+            ticketCurrency: ticketTypes.currency,
+            ticketFeatures: ticketTypes.features,
+          })
+          .from(registrations)
+          .innerJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
+          .where(
+            and(
+              eq(registrations.userId, userId),
+              eq(registrations.status, "confirmed")
+            )
+          )
+          .orderBy(desc(registrations.createdAt))
+          .limit(1);
+
+        if (!primaryRegistration) {
+          return reply.send({
+            success: true,
+            data: {
+              registration: null,
+              galaTicket: null,
+              workshops: [],
+            },
+          });
+        }
+
+        const addonRows = await db
+          .select({
+            ticketTypeId: registrationSessions.ticketTypeId,
+            linkedAt: registrationSessions.createdAt,
+            groupName: ticketTypes.groupName,
+            ticketName: ticketTypes.name,
+            ticketPrice: ticketTypes.price,
+            ticketCurrency: ticketTypes.currency,
+            sessionId: sessions.id,
+            sessionName: sessions.sessionName,
+            sessionStartTime: sessions.startTime,
+            sessionEndTime: sessions.endTime,
+            sessionRoom: sessions.room,
+          })
+          .from(registrationSessions)
+          .innerJoin(ticketTypes, eq(registrationSessions.ticketTypeId, ticketTypes.id))
+          .innerJoin(sessions, eq(registrationSessions.sessionId, sessions.id))
+          .where(
+            and(
+              eq(registrationSessions.registrationId, primaryRegistration.registrationId),
+              eq(ticketTypes.category, "addon")
+            )
+          )
+          .orderBy(desc(registrationSessions.createdAt));
+
+        const workshopRows = addonRows.filter(
+          (row) => (row.groupName || "").toLowerCase() === "workshop"
+        );
+        const galaRow = addonRows.find(
+          (row) => (row.groupName || "").toLowerCase() === "gala"
+        );
+
+        return reply.send({
+          success: true,
+          data: {
+            registration: {
+              regCode: primaryRegistration.regCode,
+              status: primaryRegistration.status,
+              ticketName: primaryRegistration.ticketName,
+              priority: primaryRegistration.ticketPriority,
+              purchasedAt: primaryRegistration.purchasedAt?.toISOString() || null,
+              amount: primaryRegistration.ticketPrice,
+              currency: primaryRegistration.ticketCurrency,
+              includes: Array.isArray(primaryRegistration.ticketFeatures)
+                ? primaryRegistration.ticketFeatures
+                : [],
+            },
+            galaTicket: galaRow
+              ? {
+                  id: `${primaryRegistration.regCode}-GALA`,
+                  status: primaryRegistration.status,
+                  name: galaRow.ticketName,
+                  purchasedAt: galaRow.linkedAt?.toISOString() || null,
+                  amount: galaRow.ticketPrice,
+                  currency: galaRow.ticketCurrency,
+                  dateTimeStart: galaRow.sessionStartTime?.toISOString() || null,
+                  dateTimeEnd: galaRow.sessionEndTime?.toISOString() || null,
+                  venue: galaRow.sessionRoom,
+                  dietary: primaryRegistration.dietaryRequirements || null,
+                }
+              : null,
+            workshops: workshopRows.map((row) => ({
+              id: `${primaryRegistration.regCode}-WS-${row.sessionId}`,
+              status: primaryRegistration.status,
+              name: row.sessionName || row.ticketName,
+              purchasedAt: row.linkedAt?.toISOString() || null,
+              amount: row.ticketPrice,
+              currency: row.ticketCurrency,
+              dateTimeStart: row.sessionStartTime?.toISOString() || null,
+              dateTimeEnd: row.sessionEndTime?.toISOString() || null,
+              venue: row.sessionRoom,
+            })),
+          },
+        });
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({
+          success: false,
+          error: "Failed to fetch my tickets",
         });
       }
     }
