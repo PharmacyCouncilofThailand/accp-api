@@ -195,74 +195,91 @@ export default async function (fastify: FastifyInstance) {
         return reply.status(404).send({ error: "Member not found" });
       }
 
-      // Delete related data in correct order (respecting FK constraints)
-      // 1. Verification rejection history (has onDelete cascade, but explicit for safety)
-      await db.delete(verificationRejectionHistory).where(eq(verificationRejectionHistory.userId, userId));
+      // Execute all deletions in a transaction
+      await db.transaction(async (tx) => {
+        // 1. Verification rejection history
+        await tx.delete(verificationRejectionHistory).where(eq(verificationRejectionHistory.userId, userId));
 
-      // 2. Password reset tokens (has onDelete cascade, but explicit for safety)
-      await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId));
+        // 2. Password reset tokens
+        await tx.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId));
 
-      // 3. Abstract reviews
-      await db.delete(abstractReviews).where(eq(abstractReviews.reviewerId, userId));
+        // 3. Abstract reviews (where user is REVIEWER)
+        await tx.delete(abstractReviews).where(eq(abstractReviews.reviewerId, userId));
 
-      // 4. Abstracts
-      await db.delete(abstracts).where(eq(abstracts.userId, userId));
+        // 3.1. Delete reviews ON user's abstracts (where user is AUTHOR)
+        const userAbstracts = await tx
+          .select({ id: abstracts.id })
+          .from(abstracts)
+          .where(eq(abstracts.userId, userId));
 
-      // 5. Get user's registrations for cascading
-      const userRegistrations = await db
-        .select({ id: registrations.id })
-        .from(registrations)
-        .where(eq(registrations.userId, userId));
+        if (userAbstracts.length > 0) {
+          const abstractIds = userAbstracts.map((a) => a.id);
+          // Delete reviews of these abstracts
+          await tx.delete(abstractReviews).where(inArray(abstractReviews.abstractId, abstractIds));
+        }
 
-      if (userRegistrations.length > 0) {
-        const regIds = userRegistrations.map((r) => r.id);
+        // 4. Abstracts (will cascade delete co-authors)
+        await tx.delete(abstracts).where(eq(abstracts.userId, userId));
 
-        // 5a. Check-ins
-        await db.delete(checkIns).where(inArray(checkIns.registrationId, regIds));
+        // 5. Get user's registrations for cascading
+        const userRegistrations = await tx
+          .select({ id: registrations.id })
+          .from(registrations)
+          .where(eq(registrations.userId, userId));
 
-        // 5b. Registration sessions
-        await db.delete(registrationSessions).where(inArray(registrationSessions.registrationId, regIds));
+        if (userRegistrations.length > 0) {
+          const regIds = userRegistrations.map((r) => r.id);
 
-        // 5c. Registration addons
-        await db.delete(registrationAddons).where(inArray(registrationAddons.registrationId, regIds));
-      }
+          // 5a. Check-ins
+          await tx.delete(checkIns).where(inArray(checkIns.registrationId, regIds));
 
-      // 6. Get user's orders for cascading
-      const userOrders = await db
-        .select({ id: orders.id })
-        .from(orders)
-        .where(eq(orders.userId, userId));
+          // 5b. Registration sessions
+          await tx.delete(registrationSessions).where(inArray(registrationSessions.registrationId, regIds));
 
-      if (userOrders.length > 0) {
-        const orderIds = userOrders.map((o) => o.id);
+          // 5c. Registration addons
+          await tx.delete(registrationAddons).where(inArray(registrationAddons.registrationId, regIds));
+        }
 
-        // 6a. Order items
-        await db.delete(orderItems).where(inArray(orderItems.orderId, orderIds));
+        // 6. Get user's orders for cascading
+        const userOrders = await tx
+          .select({ id: orders.id })
+          .from(orders)
+          .where(eq(orders.userId, userId));
 
-        // 6b. Payments
-        await db.delete(payments).where(inArray(payments.orderId, orderIds));
-      }
+        if (userOrders.length > 0) {
+          const orderIds = userOrders.map((o) => o.id);
 
-      // 7. Registrations
-      await db.delete(registrations).where(eq(registrations.userId, userId));
+          // 6a. Order items
+          await tx.delete(orderItems).where(inArray(orderItems.orderId, orderIds));
 
-      // 8. Orders
-      await db.delete(orders).where(eq(orders.userId, userId));
+          // 6b. Payments
+          await tx.delete(payments).where(inArray(payments.orderId, orderIds));
+        }
 
-      // 9. Finally delete the user
-      const [deletedUser] = await db
-        .delete(users)
-        .where(eq(users.id, userId))
-        .returning({ id: users.id });
+        // 7. Registrations
+        await tx.delete(registrations).where(eq(registrations.userId, userId));
 
-      if (!deletedUser) {
-        return reply.status(404).send({ error: "Member not found" });
-      }
+        // 8. Orders
+        await tx.delete(orders).where(eq(orders.userId, userId));
+
+        // 9. Finally delete the user
+        const [deletedUser] = await tx
+          .delete(users)
+          .where(eq(users.id, userId))
+          .returning({ id: users.id });
+
+        if (!deletedUser) {
+          throw new Error("Failed to delete user record");
+        }
+      });
 
       return reply.send({ success: true, message: "Member deleted" });
     } catch (error) {
       fastify.log.error(error);
-      return reply.status(500).send({ error: "Failed to delete member" });
+      return reply.status(500).send({
+        error: "Failed to delete member",
+        details: error instanceof Error ? error.message : "Unknown error"
+      });
     }
   });
 }

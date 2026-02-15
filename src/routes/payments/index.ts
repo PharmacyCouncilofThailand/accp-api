@@ -448,9 +448,12 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             ticketPrice: ticketTypes.price,
             ticketCurrency: ticketTypes.currency,
             ticketFeatures: ticketTypes.features,
+            orderId: orders.id,
+            orderStatus: orders.status,
           })
           .from(registrations)
           .innerJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
+          .leftJoin(orders, eq(registrations.orderId, orders.id))
           .where(
             and(
               eq(registrations.userId, userId),
@@ -503,6 +506,13 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           (row) => (row.groupName || "").toLowerCase() === "gala"
         );
 
+        let receiptUrl: string | null = null;
+        if (primaryRegistration.orderStatus === "paid" && primaryRegistration.orderId) {
+          const receiptToken = generateReceiptToken(primaryRegistration.orderId);
+          const apiBaseUrl = process.env.API_BASE_URL || "http://localhost:3002";
+          receiptUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
+        }
+
         return reply.send({
           success: true,
           data: {
@@ -517,6 +527,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               includes: Array.isArray(primaryRegistration.ticketFeatures)
                 ? primaryRegistration.ticketFeatures
                 : [],
+              receiptUrl,
             },
             galaTicket: galaRow
               ? {
