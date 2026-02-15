@@ -3,6 +3,33 @@ import { db } from "../../database/index.js";
 import { sessions, events, ticketTypes, registrations, registrationSessions, ticketSessions, eventSpeakers, speakers } from "../../database/schema.js";
 import { eq, desc, sql, and, count, inArray } from "drizzle-orm";
 
+function parseAllowedRoles(raw: string | null): string[] | null {
+    if (!raw) return null;
+
+    const normalized = raw.trim();
+    if (!normalized) return null;
+
+    if (normalized.startsWith("[")) {
+        try {
+            const parsed = JSON.parse(normalized);
+            if (Array.isArray(parsed)) {
+                return parsed
+                    .map((role) => String(role).trim())
+                    .filter(Boolean);
+            }
+        } catch {
+            // Fall through to CSV parsing
+        }
+    }
+
+    const csvRoles = normalized
+        .split(",")
+        .map((role) => role.trim())
+        .filter(Boolean);
+
+    return csvRoles.length > 0 ? csvRoles : null;
+}
+
 export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
     // Get all published workshop sessions (public, no auth required)
     // Workshops are sessions belonging to events with category containing 'workshop'
@@ -162,7 +189,7 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     name: t.name,
                     price: t.price,
                     currency: t.currency,
-                    allowedRoles: t.allowedRoles ? JSON.parse(t.allowedRoles as string) : null,
+                    allowedRoles: parseAllowedRoles(t.allowedRoles),
                     saleStartDate: t.saleStartDate
                 }));
 
