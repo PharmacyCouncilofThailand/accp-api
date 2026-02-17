@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { promoCodes, events, staffEventAssignments } from "../../database/schema.js";
+import { promoCodes, events, staffEventAssignments, promoCodeRuleSets, promoCodeRuleItems, ticketTypes } from "../../database/schema.js";
 import { eq, desc, ilike, and, count, inArray, or } from "drizzle-orm";
 import { z } from "zod";
 
@@ -12,18 +12,27 @@ const promoQuerySchema = z.object({
     status: z.enum(['active', 'inactive', 'expired']).optional(),
 });
 
+const ruleSetSchema = z.object({
+    matchType: z.enum(['all', 'any', 'only']).default('all'),
+    ticketTypeIds: z.array(z.number().int().positive()).min(1),
+});
+
 const createPromoSchema = z.object({
     eventId: z.number().nullable().optional(),
     code: z.string().min(1).max(50),
     description: z.string().optional(),
     discountType: z.enum(['percentage', 'fixed']),
-    discountValue: z.number().positive(),
+    discountValue: z.number().min(0).default(0),
+    fixedValueThb: z.number().min(0).nullable().optional(),
+    fixedValueUsd: z.number().min(0).nullable().optional(),
     minPurchase: z.number().min(0).default(0),
     maxDiscount: z.number().nullable().optional(),
     maxUses: z.number().min(1).default(100),
+    maxUsesPerUser: z.number().min(1).default(1),
     validFrom: z.string().optional(),
     validUntil: z.string().optional(),
     isActive: z.boolean().default(true),
+    ruleSets: z.array(ruleSetSchema).optional(),
 });
 
 const updatePromoSchema = createPromoSchema.partial();
@@ -97,7 +106,12 @@ export default async function (fastify: FastifyInstance) {
                     description: promoCodes.description,
                     discountType: promoCodes.discountType,
                     discountValue: promoCodes.discountValue,
+                    fixedValueThb: promoCodes.fixedValueThb,
+                    fixedValueUsd: promoCodes.fixedValueUsd,
+                    minPurchase: promoCodes.minPurchase,
+                    maxDiscount: promoCodes.maxDiscount,
                     maxUses: promoCodes.maxUses,
+                    maxUsesPerUser: promoCodes.maxUsesPerUser,
                     usedCount: promoCodes.usedCount,
                     validFrom: promoCodes.validFrom,
                     validUntil: promoCodes.validUntil,
@@ -142,7 +156,7 @@ export default async function (fastify: FastifyInstance) {
         }
     });
 
-    // Get Single Promo Code
+    // Get Single Promo Code (with rule sets)
     fastify.get("/:id", async (request, reply) => {
         const { id } = request.params as { id: string };
 
@@ -156,7 +170,32 @@ export default async function (fastify: FastifyInstance) {
                 return reply.status(404).send({ error: "Promo code not found" });
             }
 
-            return reply.send({ promoCode: promo });
+            // Fetch rule sets with their items
+            const ruleSetsRows = await db
+                .select()
+                .from(promoCodeRuleSets)
+                .where(eq(promoCodeRuleSets.promoCodeId, promo.id));
+
+            const ruleSets = [];
+            for (const rs of ruleSetsRows) {
+                const items = await db
+                    .select({
+                        id: promoCodeRuleItems.id,
+                        ticketTypeId: promoCodeRuleItems.ticketTypeId,
+                        ticketName: ticketTypes.name,
+                    })
+                    .from(promoCodeRuleItems)
+                    .leftJoin(ticketTypes, eq(promoCodeRuleItems.ticketTypeId, ticketTypes.id))
+                    .where(eq(promoCodeRuleItems.ruleSetId, rs.id));
+
+                ruleSets.push({
+                    id: rs.id,
+                    matchType: rs.matchType,
+                    items,
+                });
+            }
+
+            return reply.send({ promoCode: { ...promo, ruleSets } });
         } catch (error) {
             fastify.log.error(error);
             return reply.status(500).send({ error: "Failed to fetch promo code" });
@@ -189,12 +228,34 @@ export default async function (fastify: FastifyInstance) {
                 description: data.description || null,
                 discountType: data.discountType,
                 discountValue: data.discountValue.toString(),
+                fixedValueThb: data.fixedValueThb != null ? data.fixedValueThb.toString() : null,
+                fixedValueUsd: data.fixedValueUsd != null ? data.fixedValueUsd.toString() : null,
+                minPurchase: data.minPurchase.toString(),
+                maxDiscount: data.maxDiscount != null ? data.maxDiscount.toString() : null,
                 maxUses: data.maxUses,
+                maxUsesPerUser: data.maxUsesPerUser,
                 usedCount: 0,
                 validFrom: data.validFrom ? new Date(data.validFrom) : null,
                 validUntil: data.validUntil ? new Date(data.validUntil) : null,
                 isActive: data.isActive,
             }).returning();
+
+            // Create rule sets if provided
+            if (data.ruleSets && data.ruleSets.length > 0) {
+                for (const rs of data.ruleSets) {
+                    const [ruleSet] = await db.insert(promoCodeRuleSets).values({
+                        promoCodeId: newPromo.id,
+                        matchType: rs.matchType,
+                    }).returning();
+
+                    await db.insert(promoCodeRuleItems).values(
+                        rs.ticketTypeIds.map(tid => ({
+                            ruleSetId: ruleSet.id,
+                            ticketTypeId: tid,
+                        }))
+                    );
+                }
+            }
 
             return reply.status(201).send({ promoCode: newPromo });
         } catch (error) {
@@ -230,7 +291,12 @@ export default async function (fastify: FastifyInstance) {
             if (data.description !== undefined) updates.description = data.description;
             if (data.discountType) updates.discountType = data.discountType;
             if (data.discountValue !== undefined) updates.discountValue = data.discountValue.toString();
+            if (data.fixedValueThb !== undefined) updates.fixedValueThb = data.fixedValueThb != null ? data.fixedValueThb.toString() : null;
+            if (data.fixedValueUsd !== undefined) updates.fixedValueUsd = data.fixedValueUsd != null ? data.fixedValueUsd.toString() : null;
+            if (data.minPurchase !== undefined) updates.minPurchase = data.minPurchase.toString();
+            if (data.maxDiscount !== undefined) updates.maxDiscount = data.maxDiscount != null ? data.maxDiscount.toString() : null;
             if (data.maxUses !== undefined) updates.maxUses = data.maxUses;
+            if (data.maxUsesPerUser !== undefined) updates.maxUsesPerUser = data.maxUsesPerUser;
             if (data.validFrom !== undefined) updates.validFrom = data.validFrom ? new Date(data.validFrom) : null;
             if (data.validUntil !== undefined) updates.validUntil = data.validUntil ? new Date(data.validUntil) : null;
             if (data.isActive !== undefined) updates.isActive = data.isActive;
@@ -240,6 +306,30 @@ export default async function (fastify: FastifyInstance) {
                 .set(updates)
                 .where(eq(promoCodes.id, parseInt(id)))
                 .returning();
+
+            // Update rule sets if provided
+            if (data.ruleSets !== undefined) {
+                // Delete existing rule sets (cascade deletes items)
+                await db.delete(promoCodeRuleSets)
+                    .where(eq(promoCodeRuleSets.promoCodeId, parseInt(id)));
+
+                // Re-create rule sets
+                if (data.ruleSets && data.ruleSets.length > 0) {
+                    for (const rs of data.ruleSets) {
+                        const [ruleSet] = await db.insert(promoCodeRuleSets).values({
+                            promoCodeId: parseInt(id),
+                            matchType: rs.matchType,
+                        }).returning();
+
+                        await db.insert(promoCodeRuleItems).values(
+                            rs.ticketTypeIds.map(tid => ({
+                                ruleSetId: ruleSet.id,
+                                ticketTypeId: tid,
+                            }))
+                        );
+                    }
+                }
+            }
 
             return reply.send({ promoCode: updatedPromo });
         } catch (error) {

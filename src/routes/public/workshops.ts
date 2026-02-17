@@ -65,6 +65,7 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     startTime: sessions.startTime,
                     endTime: sessions.endTime,
                     maxCapacity: sessions.maxCapacity,
+                    agenda: sessions.agenda,
                 })
                 .from(sessions)
                 .where(
@@ -238,6 +239,7 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     instructors: instructors,
                     color: colors[index % colors.length],
                     icon: icons[index % icons.length],
+                    agenda: session.agenda || null,
                     isFull,
                     saleStartDate: saleStartDate ? saleStartDate.toISOString() : null,
                 };

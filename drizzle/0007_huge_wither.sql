@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "agenda_time" varchar(120);

@@ -12,6 +12,8 @@ import {
   users,
   sessions,
   ticketSessions,
+  promoCodes,
+  promoCodeUsages,
 } from "../../database/schema.js";
 import { eq, and, sql, inArray, count, desc } from "drizzle-orm";
 import { createPaymentIntentSchema } from "../../schemas/payment.schema.js";
@@ -20,6 +22,7 @@ import { calculateStripeFee, resolveFeeMethod } from "../../utils/stripeFee.js";
 import { generateReceiptToken, verifyReceiptToken } from "../../utils/receiptToken.js";
 import { generateReceiptPdf } from "../../services/receiptPdf.js";
 import { sendPaymentReceiptEmail } from "../../services/emailService.js";
+import { validatePromoCode, reservePromoUsage, settlePromoUsageSuccess, cancelPromoUsage } from "../../utils/promoEngine.js";
 
 // ─────────────────────────────────────────────────────
 // Helpers
@@ -35,6 +38,14 @@ function generateRegCode(): string {
   const ts = Date.now().toString(36).toUpperCase();
   const rand = Math.random().toString(36).substring(2, 8).toUpperCase();
   return `REG-${ts}${rand}`;
+}
+
+function sortOrderItemsPrimaryFirst<T extends { itemType?: string; type?: string }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const aRank = (a.itemType ?? a.type) === "ticket" ? 0 : 1;
+    const bRank = (b.itemType ?? b.type) === "ticket" ? 0 : 1;
+    return aRank - bRank;
+  });
 }
 
 /**
@@ -121,7 +132,7 @@ async function processSuccessfulPayment(
   receiptUrl: string | null,
   paymentChannel: string,
 ): Promise<{
-  order: { id: number; userId: number; orderNumber: string; totalAmount: string; currency: string; status: string };
+  order: { id: number; userId: number; orderNumber: string; totalAmount: string; currency: string; status: string; discountAmount: string | null; promoCode: string | null };
   user: { email: string; firstName: string; lastName: string };
   regCode: string;
 } | null> {
@@ -567,6 +578,100 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
   );
 
   // ─────────────────────────────────────────────────────
+  // POST /payments/preview (JWT protected)
+  // Validates promo code and returns pricing breakdown
+  // without creating any order or reservation
+  // ─────────────────────────────────────────────────────
+  fastify.post(
+    "/preview",
+    { preHandler: [fastify.authenticate] },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const parsed = createPaymentIntentSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ success: false, error: "Invalid input", details: parsed.error.flatten() });
+      }
+
+      const { packageId, addOnIds, currency, paymentMethod, promoCode } = parsed.data;
+      const userId = request.user.id;
+      const isAddonOnly = !packageId || packageId === "";
+
+      try {
+        // Resolve primary ticket
+        let primaryTicket: { id: number; price: string; eventId: number } | null = null;
+        if (!isAddonOnly) {
+          primaryTicket = await resolveTicketId(packageId, currency, "primary");
+        }
+
+        // Resolve add-ons
+        let subtotal = primaryTicket ? Number(primaryTicket.price) : 0;
+        const resolvedAddOns: { id: number; price: string; eventId: number }[] = [];
+        for (const addOnId of addOnIds) {
+          const addon = await resolveTicketId(addOnId, currency, "addon");
+          if (addon) {
+            subtotal += Number(addon.price);
+            resolvedAddOns.push(addon);
+          }
+        }
+
+        // Collect all selected ticket type IDs for rule-set validation
+        const selectedTicketTypeIds = [
+          ...(primaryTicket ? [primaryTicket.id] : []),
+          ...resolvedAddOns.map(a => a.id),
+        ];
+
+        let discountAmount = 0;
+        let discountType: string | null = null;
+        let discountValue: number | null = null;
+        let promoError: string | null = null;
+        let promoValid = false;
+
+        if (promoCode && promoCode.trim()) {
+          const result = await validatePromoCode(
+            promoCode.trim(),
+            userId,
+            currency,
+            subtotal,
+            selectedTicketTypeIds,
+          );
+
+          if (result.valid) {
+            promoValid = true;
+            discountAmount = result.discountAmount!;
+            discountType = result.discountType!;
+            discountValue = result.discountValue!;
+          } else {
+            promoError = result.error || "Invalid promo code";
+          }
+        }
+
+        const netAmount = Math.round((subtotal - discountAmount) * 100) / 100;
+        const feeMethod = resolveFeeMethod(paymentMethod, currency);
+        const feeBreakdown = netAmount > 0 ? calculateStripeFee(netAmount, feeMethod) : { fee: 0, total: 0 };
+
+        return reply.send({
+          success: true,
+          data: {
+            subtotal,
+            discountAmount,
+            discountType,
+            discountValue,
+            netAmount,
+            fee: feeBreakdown.fee,
+            total: feeBreakdown.total,
+            currency,
+            feeMethod,
+            promoValid,
+            promoError,
+          },
+        });
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({ success: false, error: "Failed to preview pricing" });
+      }
+    }
+  );
+
+  // ─────────────────────────────────────────────────────
   // POST /payments/create-intent (JWT protected)
   // ─────────────────────────────────────────────────────
   fastify.post(
@@ -757,22 +862,61 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         }
 
         // 5. Apply promo code (if any)
-        // TODO: Validate promo code and calculate discount
-        // let discount = 0;
-        // totalAmount -= discount;
+        const subtotalBeforeDiscount = totalAmount;
+        let discountAmount = 0;
+        let promoResult: { promoCodeId?: number; discountType?: string; discountValue?: number; discountAmount?: number } = {};
+
+        const selectedTicketTypeIds = [
+          ...(primaryTicket ? [primaryTicket.id] : []),
+          ...resolvedAddOns.map(a => a.id),
+        ];
+
+        if (promoCode && promoCode.trim()) {
+          const validation = await validatePromoCode(
+            promoCode.trim(),
+            userId,
+            currency,
+            subtotalBeforeDiscount,
+            selectedTicketTypeIds,
+          );
+
+          if (!validation.valid) {
+            return reply.status(400).send({
+              success: false,
+              error: validation.error || "Invalid promo code",
+              code: "INVALID_PROMO",
+            });
+          }
+
+          discountAmount = validation.discountAmount!;
+          totalAmount = validation.netAmount!;
+          promoResult = {
+            promoCodeId: validation.promoCodeId,
+            discountType: validation.discountType,
+            discountValue: validation.discountValue,
+            discountAmount: validation.discountAmount,
+          };
+          fastify.log.info(`[CREATE-INTENT] Promo "${promoCode}" applied: discount=${discountAmount}, net=${totalAmount}`);
+        }
 
         // 6. Calculate Stripe fee (pass-through to buyer)
         const feeMethod = resolveFeeMethod(paymentMethod, currency);
-        const feeBreakdown = calculateStripeFee(totalAmount, feeMethod);
+        const feeBreakdown = totalAmount > 0 ? calculateStripeFee(totalAmount, feeMethod) : { fee: 0, total: 0 };
         const chargeAmount = feeBreakdown.total; // amount buyer pays (net + fee)
 
-        // 7. Create Order record (with orderNumber)
+        // 7. Create Order record (with orderNumber + promo info)
         const orderNumber = generateOrderNumber();
         const [order] = await db
           .insert(orders)
           .values({
             userId,
             orderNumber,
+            subtotalAmount: String(subtotalBeforeDiscount),
+            discountAmount: String(discountAmount),
+            promoCodeId: promoResult.promoCodeId || null,
+            promoCode: promoCode ? promoCode.trim().toUpperCase() : null,
+            promoDiscountType: promoResult.discountType || null,
+            promoDiscountValue: promoResult.discountValue != null ? String(promoResult.discountValue) : null,
             totalAmount: String(chargeAmount),
             currency,
             status: "pending",
@@ -826,6 +970,9 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         for (const addon of resolvedAddOns) {
           descLines.push(`• ${nameMap.get(addon.id) || "Add-on"}: ${currency === "THB" ? "฿" : "$"}${Number(addon.price).toLocaleString()}`);
         }
+        if (discountAmount > 0) {
+          descLines.push(`• Discount: -${currency === "THB" ? "฿" : "$"}${discountAmount.toLocaleString()}`);
+        }
         if (feeBreakdown.fee > 0) {
           descLines.push(`• Fee: ${currency === "THB" ? "฿" : "$"}${feeBreakdown.fee.toLocaleString()}`);
         }
@@ -849,6 +996,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               fee: String(feeBreakdown.fee),
               feeMethod,
               workshopSessionId: workshopSessionId ? String(workshopSessionId) : "",
+              promoCode: promoCode ? promoCode.trim().toUpperCase() : "",
+              discountAmount: String(discountAmount),
             },
             description: descLines.join("\n"),
           },
@@ -865,14 +1014,24 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           stripeSessionId: paymentIntent.id,
         });
 
-        // 11. Return clientSecret + fee breakdown
+        // 10b. Reserve promo usage (pending) if promo was applied
+        if (promoResult.promoCodeId) {
+          await reservePromoUsage(promoResult.promoCodeId, userId, order.id, discountAmount);
+          fastify.log.info(`[CREATE-INTENT] Reserved promo usage for order ${order.id}, promoId=${promoResult.promoCodeId}`);
+        }
+
+        // 11. Return clientSecret + fee breakdown + discount info
         return reply.send({
           success: true,
           data: {
             clientSecret: paymentIntent.client_secret,
             orderId: order.id,
             orderNumber,
-            subtotal: totalAmount,
+            subtotal: subtotalBeforeDiscount,
+            discountAmount,
+            discountType: promoResult.discountType || null,
+            discountValue: promoResult.discountValue || null,
+            netAmount: totalAmount,
             fee: feeBreakdown.fee,
             total: chargeAmount,
             currency,
@@ -954,6 +1113,9 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             .set({ status: "cancelled" })
             .where(eq(payments.id, payment.id));
         }
+
+        // Cancel promo usage reservation
+        await cancelPromoUsage(orderId);
 
         fastify.log.info(`[CANCEL-INTENT] Order ${orderId} cancelled by user ${userId}`);
 
@@ -1053,6 +1215,11 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             paymentChannel,
           );
 
+          // Settle promo usage on success
+          if (txResult) {
+            await settlePromoUsageSuccess(orderId);
+          }
+
           // Send receipt + confirmation emails (fire-and-forget)
           if (txResult) {
             const { order, user, regCode } = txResult;
@@ -1068,11 +1235,15 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                 .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
                 .where(eq(orderItems.orderId, orderId));
 
-              const emailSubtotal = emailItems.reduce(
+              const sortedEmailItems = sortOrderItemsPrimaryFirst(emailItems);
+
+              const emailSubtotal = sortedEmailItems.reduce(
                 (sum, item) => sum + Number(item.price) * item.quantity, 0
               );
+              const emailDiscount = Number(order.discountAmount || 0);
+              const emailNetAmount = emailSubtotal - emailDiscount;
               const emailTotal = Number(order.totalAmount);
-              const emailFee = Math.round((emailTotal - emailSubtotal) * 100) / 100;
+              const emailFee = Math.round((emailTotal - emailNetAmount) * 100) / 100;
 
               const receiptToken = generateReceiptToken(orderId);
               const apiBaseUrl = process.env.API_BASE_URL || `http://localhost:3002`;
@@ -1085,7 +1256,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                 order.orderNumber,
                 new Date(),
                 paymentChannel,
-                emailItems.map((i) => ({
+                sortedEmailItems.map((i) => ({
                   name: i.name,
                   type: i.type,
                   price: Number(i.price),
@@ -1123,6 +1294,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             .set({ status: "failed" })
             .where(eq(payments.stripeSessionId, paymentIntent.id));
 
+          await cancelPromoUsage(orderId);
+
           fastify.log.warn(`Payment failed for order ${orderId}`);
           break;
         }
@@ -1141,6 +1314,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             .update(payments)
             .set({ status: "cancelled" })
             .where(eq(payments.stripeSessionId, paymentIntent.id));
+
+          await cancelPromoUsage(orderId);
 
           fastify.log.info(`Payment canceled for order ${orderId}`);
           break;
@@ -1246,11 +1421,13 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               paymentData = { ...paymentData, status: "paid", paymentChannel: verifyPaymentChannel, stripeReceiptUrl: receiptUrl, paidAt: new Date() };
               justTransitionedToPaid = true;
               verifyRegCode = verifyResult.regCode;
+              await settlePromoUsageSuccess(order.id);
               fastify.log.info(`[VERIFY] Updated order ${order.id} to paid`);
             }
           } else if (pi.status === "canceled" || pi.status === "requires_payment_method") {
             await db.update(orders).set({ status: "cancelled" }).where(eq(orders.id, order.id));
             await db.update(payments).set({ status: "failed" }).where(eq(payments.stripeSessionId, piId));
+            await cancelPromoUsage(order.id);
             orderStatus = "cancelled";
             paymentData = { ...paymentData, status: "failed" };
           }
@@ -1272,10 +1449,27 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
         .where(eq(orderItems.orderId, order.id));
 
-      // Calculate subtotal (sum of items) and fee
-      const subtotal = items.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0);
+      const sortedItems = sortOrderItemsPrimaryFirst(items);
+
+      // Calculate subtotal (sum of items) and fee, accounting for discount
+      const subtotal = sortedItems.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0);
       const totalPaid = Number(paymentData.amount);
-      const fee = Math.round((totalPaid - subtotal) * 100) / 100;
+
+      // Fetch order discount info for accurate fee calculation
+      const [orderFull] = await db
+        .select({
+          discountAmount: orders.discountAmount,
+          promoCode: orders.promoCode,
+          promoDiscountType: orders.promoDiscountType,
+          promoDiscountValue: orders.promoDiscountValue,
+        })
+        .from(orders)
+        .where(eq(orders.id, order.id))
+        .limit(1);
+
+      const verifyDiscount = Number(orderFull?.discountAmount || 0);
+      const verifyNetAmount = subtotal - verifyDiscount;
+      const fee = Math.round((totalPaid - verifyNetAmount) * 100) / 100;
 
       // Generate receipt download URL for paid orders
       let receiptDownloadUrl: string | null = null;
@@ -1308,7 +1502,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                 order.orderNumber,
                 new Date(),
                 paymentData.paymentChannel || "card",
-                items.map((i) => ({
+                sortedItems.map((i) => ({
                   name: i.ticketName,
                   type: i.itemType,
                   price: Number(i.price),
@@ -1342,7 +1536,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             paymentChannel: paymentData.paymentChannel,
           },
           receiptDownloadUrl,
-          items: items.map(item => ({
+          items: sortedItems.map(item => ({
             type: item.itemType,
             name: item.ticketName,
             category: item.ticketCategory,
@@ -1350,6 +1544,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             quantity: item.quantity,
           })),
           subtotal: String(subtotal),
+          discount: String(verifyDiscount),
+          promoCode: orderFull?.promoCode || null,
           fee: fee > 0 ? String(fee) : "0",
         },
       });
@@ -1498,6 +1694,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             id: orders.id,
             orderNumber: orders.orderNumber,
             totalAmount: orders.totalAmount,
+            discountAmount: orders.discountAmount,
+            promoCode: orders.promoCode,
             currency: orders.currency,
             status: orders.status,
             userId: orders.userId,
@@ -1560,12 +1758,16 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
           .where(eq(orderItems.orderId, orderId));
 
-        // 6. Calculate fee
-        const subtotal = items.reduce(
+        const sortedItems = sortOrderItemsPrimaryFirst(items);
+
+        // 6. Calculate fee (accounting for discount)
+        const subtotal = sortedItems.reduce(
           (sum, item) => sum + Number(item.price) * item.quantity, 0
         );
+        const receiptDiscount = Number(order.discountAmount || 0);
+        const receiptNetAmount = subtotal - receiptDiscount;
         const total = Number(order.totalAmount);
-        const fee = Math.round((total - subtotal) * 100) / 100;
+        const fee = Math.round((total - receiptNetAmount) * 100) / 100;
 
         // 7. Generate PDF
         const pdfStream = generateReceiptPdf({
@@ -1573,13 +1775,15 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           paidAt: payment?.paidAt || new Date(),
           paymentChannel: payment?.paymentChannel || "card",
           currency: order.currency,
-          items: items.map((i) => ({
+          items: sortedItems.map((i) => ({
             name: i.name,
             type: i.type as "ticket" | "addon",
             price: Number(i.price),
             quantity: i.quantity,
           })),
           subtotal,
+          discount: receiptDiscount,
+          promoCode: order.promoCode,
           fee: fee > 0 ? fee : 0,
           total,
           customerName: `${user.firstName} ${user.lastName}`,
@@ -1590,7 +1794,10 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         const filename = `ACCP2026-receipt-${order.orderNumber}.pdf`;
         reply.header("Content-Type", "application/pdf");
         reply.header("Content-Disposition", `attachment; filename="${filename}"`);
-        reply.header("Cache-Control", "private, max-age=3600");
+        // Always regenerate latest version (avoid stale cached PDF after template updates)
+        reply.header("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+        reply.header("Pragma", "no-cache");
+        reply.header("Expires", "0");
 
         return reply.send(pdfStream);
       } catch (error) {

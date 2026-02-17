@@ -35,6 +35,10 @@ export const createSessionSchema = z.object({
     endTime: z.string().datetime(),
     speakerIds: z.array(z.number()).optional(), // New way: link to speakers table
     maxCapacity: z.number().int().positive().default(100),
+    agenda: z.array(z.object({
+        time: z.string().min(1),
+        topic: z.string().min(1),
+    })).optional().nullable(),
 });
 
 export const updateSessionSchema = createSessionSchema.partial();

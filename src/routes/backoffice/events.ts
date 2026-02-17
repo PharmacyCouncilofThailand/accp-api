@@ -520,6 +520,7 @@ export default async function (fastify: FastifyInstance) {
             startTime: new Date(data.startTime),
             endTime: new Date(data.endTime),
             maxCapacity: data.maxCapacity,
+            agenda: data.agenda ?? null,
           })
           .returning();
 
@@ -560,7 +561,8 @@ export default async function (fastify: FastifyInstance) {
     }
 
     const data = result.data;
-    const updates: Record<string, unknown> = { ...data, updatedAt: new Date() };
+    const { speakerIds, ...dbFields } = data;
+    const updates: Record<string, unknown> = { ...dbFields, updatedAt: new Date() };
 
     if (data.startTime) updates.startTime = new Date(data.startTime);
     if (data.endTime) updates.endTime = new Date(data.endTime);
