@@ -97,7 +97,10 @@ export async function createSecureLink(
   const secureEndpoint = `${getPaySolutionsBaseUrl()}/secure/v3/secure/encryptz/${encodeURIComponent(merchantLinkName)}`;
   const expireDate = formatPaySolutionsDate(new Date(Date.now() + 1000 * 60 * 30)); // 30 min
 
-  const payload = {
+  // Only include parameters documented in Secure Link API spec.
+  // cc (currency) and channel are NOT part of Secure Link — sending them
+  // can cause e101 "Invalid Parameter" when PaySolutions processes the payment.
+  const payload: Record<string, string> = {
     merchant: merchantLinkName,
     payValue: String(round2(params.amount)),
     orderDetail: sanitizeOrderDetail(params.orderDetail),
@@ -110,9 +113,9 @@ export async function createSecureLink(
     bankInstallment: "",
     oneTime: params.oneTime || "Y",
     refNo: params.refNo,
-    cc: toCurrencyCode(params.currency),
-    channel: params.channel,
   };
+
+  console.log("[SECURE-LINK] Sending payload:", JSON.stringify(payload, null, 2));
 
   const response = await axios.post<Record<string, unknown>>(secureEndpoint, payload, {
     headers: {
@@ -123,6 +126,7 @@ export async function createSecureLink(
   });
 
   const body = response.data || {};
+  console.log("[SECURE-LINK] Response:", JSON.stringify(body, null, 2));
   const payValue = String(body.payValue || "").trim();
   const encryptedToken = String(body.orderDetail || "").trim();
 
