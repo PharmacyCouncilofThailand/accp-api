@@ -18,7 +18,21 @@ import {
 import { eq, and, sql, inArray, count, desc } from "drizzle-orm";
 import { createPaymentIntentSchema } from "../../schemas/payment.schema.js";
 import type Stripe from "stripe";
-import { calculateStripeFee, resolveFeeMethod } from "../../utils/stripeFee.js";
+import {
+  createSecureLink,
+  inquiryPayment,
+  isPaySolutionsFailedStatus,
+  isPaySolutionsPaidStatus,
+  isPaySolutionsRefundStatus,
+  normalizePaySolutionsChannel,
+  normalizePaySolutionsPayload,
+  verifyPaySolutionsPostback,
+} from "../../services/paySolutions.js";
+import {
+  calculatePaySolutionsFeeExact,
+  resolvePaySolutionsChannel,
+  resolvePaySolutionsFeeMethod,
+} from "../../utils/paySolutionsFee.js";
 import { generateReceiptToken, verifyReceiptToken } from "../../utils/receiptToken.js";
 import { generateReceiptPdf } from "../../services/receiptPdf.js";
 import { sendPaymentReceiptEmail } from "../../services/emailService.js";
@@ -38,6 +52,76 @@ function generateRegCode(): string {
   const ts = Date.now().toString(36).toUpperCase();
   const rand = Math.random().toString(36).substring(2, 8).toUpperCase();
   return `REG-${ts}${rand}`;
+}
+
+async function generatePaySolutionsRefno(): Promise<string> {
+  const rows = await db.execute(sql`
+    select lpad(nextval('pay_solutions_refno_seq')::text, 12, '0') as refno
+  `);
+
+  const refno = String((rows as unknown as Array<{ refno: string }>)[0]?.refno || "");
+  if (!/^\d{12}$/.test(refno)) {
+    throw new Error("Failed to generate Pay Solutions refno");
+  }
+
+  return refno;
+}
+
+function normalizePhoneNumber(phone?: string | null): string {
+  if (!phone) return "";
+  const digits = phone.replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("0")) {
+    return `66${digits.slice(1)}`;
+  }
+  if (digits.startsWith("66")) {
+    return digits;
+  }
+  return digits;
+}
+
+function parsePostbackBody(body: unknown): Record<string, unknown> {
+  if (!body) return {};
+  if (typeof body === "object" && !Array.isArray(body)) {
+    return body as Record<string, unknown>;
+  }
+
+  if (typeof body === "string") {
+    const trimmed = body.trim();
+    if (!trimmed) return {};
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // fall through to URL encoded parsing
+    }
+
+    const params = new URLSearchParams(trimmed);
+    const obj: Record<string, unknown> = {};
+    for (const [key, value] of params.entries()) {
+      obj[key] = value;
+    }
+    return obj;
+  }
+
+  return {};
+}
+
+function parseWorkshopSessionIdFromDetails(details: unknown): number | null {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return null;
+  }
+
+  const raw = (details as Record<string, unknown>).workshopSessionId;
+  if (raw === undefined || raw === null || raw === "") {
+    return null;
+  }
+
+  const parsed = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function sortOrderItemsPrimaryFirst<T extends { itemType?: string; type?: string }>(items: T[]): T[] {
@@ -127,10 +211,13 @@ async function resolveTicketId(
 async function processSuccessfulPayment(
   fastify: { log: { info: (...args: any[]) => void; error: (...args: any[]) => void } },
   orderId: number,
-  paymentIntentId: string,
+  providerRef: string,
   workshopSessionId: number | null,
   receiptUrl: string | null,
   paymentChannel: string,
+  paymentProvider: "stripe" | "pay_solutions" = "stripe",
+  providerStatus: string = "PAID",
+  paymentDetails: Record<string, unknown> | null = null,
 ): Promise<{
   order: { id: number; userId: number; orderNumber: string; totalAmount: string; currency: string; status: string; discountAmount: string | null; promoCode: string | null };
   user: { email: string; firstName: string; lastName: string };
@@ -159,10 +246,15 @@ async function processSuccessfulPayment(
       .set({
         status: "paid",
         paymentChannel,
-        stripeReceiptUrl: receiptUrl,
+        paymentProvider,
+        providerRef,
+        providerStatus,
+        paySolutionsChannel: paymentProvider === "pay_solutions" ? paymentChannel : undefined,
+        stripeReceiptUrl: paymentProvider === "stripe" ? receiptUrl : null,
+        paymentDetails: paymentDetails || undefined,
         paidAt: new Date(),
       })
-      .where(eq(payments.stripeSessionId, paymentIntentId));
+      .where(eq(payments.orderId, orderId));
 
     // Get user info
     const [user] = await tx
@@ -645,8 +737,10 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         }
 
         const netAmount = Math.round((subtotal - discountAmount) * 100) / 100;
-        const feeMethod = resolveFeeMethod(paymentMethod, currency);
-        const feeBreakdown = netAmount > 0 ? calculateStripeFee(netAmount, feeMethod) : { fee: 0, total: 0 };
+        const feeMethod = resolvePaySolutionsFeeMethod(paymentMethod, currency);
+        const feeBreakdown = netAmount > 0
+          ? calculatePaySolutionsFeeExact(netAmount, feeMethod)
+          : { fee: 0, total: 0 };
 
         return reply.send({
           success: true,
@@ -899,10 +993,14 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           fastify.log.info(`[CREATE-INTENT] Promo "${promoCode}" applied: discount=${discountAmount}, net=${totalAmount}`);
         }
 
-        // 6. Calculate Stripe fee (pass-through to buyer)
-        const feeMethod = resolveFeeMethod(paymentMethod, currency);
-        const feeBreakdown = totalAmount > 0 ? calculateStripeFee(totalAmount, feeMethod) : { fee: 0, total: 0 };
-        const chargeAmount = feeBreakdown.total; // amount buyer pays (net + fee)
+        // 6. Calculate Pay Solutions fee (pass-through to buyer)
+        const feeMethod = resolvePaySolutionsFeeMethod(paymentMethod, currency);
+        const feeBreakdown = totalAmount > 0
+          ? calculatePaySolutionsFeeExact(totalAmount, feeMethod)
+          : { fee: 0, total: 0, processingFee: 0, processingVat: 0 };
+        const chargeAmount = feeBreakdown.total;
+        const paySolutionsChannel = resolvePaySolutionsChannel(paymentMethod, currency);
+        const paySolutionsRefno = await generatePaySolutionsRefno();
 
         // 7. Create Order record (with orderNumber + promo info)
         const orderNumber = generateOrderNumber();
@@ -944,87 +1042,119 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // 9. Create Stripe PaymentIntent
-        let paymentMethodTypes: string[];
-        if (paymentMethod === "qr" && currency === "THB") {
-          paymentMethodTypes = ["promptpay"];
-        } else {
-          paymentMethodTypes = ["card"];
-        }
-
-        // Build detailed description for Stripe receipt
+        // Build order detail for secure link
         const ticketIds = [
           ...(primaryTicket ? [primaryTicket.id] : []),
-          ...resolvedAddOns.map(a => a.id),
+          ...resolvedAddOns.map((a) => a.id),
         ];
-        const ticketNames = await db
-          .select({ id: ticketTypes.id, name: ticketTypes.name })
-          .from(ticketTypes)
-          .where(sql`${ticketTypes.id} IN (${sql.join(ticketIds.map(id => sql`${id}`), sql`, `)})`);
-        const nameMap = new Map(ticketNames.map(t => [t.id, t.name]));
+        const ticketNames = ticketIds.length > 0
+          ? await db
+            .select({ id: ticketTypes.id, name: ticketTypes.name })
+            .from(ticketTypes)
+            .where(sql`${ticketTypes.id} IN (${sql.join(ticketIds.map((id) => sql`${id}`), sql`, `)})`)
+          : [];
+        const nameMap = new Map(ticketNames.map((t) => [t.id, t.name]));
 
-        const descLines = [`ACCP2026 - Order ${orderNumber}${isAddonOnly ? " (Add-on)" : ""}`];
+        const descLines = [`ACCP2026 ${orderNumber}${isAddonOnly ? " Add-on" : ""}`];
         if (primaryTicket) {
-          descLines.push(`• ${nameMap.get(primaryTicket.id) || packageId}: ${currency === "THB" ? "฿" : "$"}${Number(primaryTicket.price).toLocaleString()}`);
+          descLines.push(`${nameMap.get(primaryTicket.id) || packageId}: ${currency === "THB" ? "THB" : "USD"} ${Number(primaryTicket.price).toLocaleString()}`);
         }
         for (const addon of resolvedAddOns) {
-          descLines.push(`• ${nameMap.get(addon.id) || "Add-on"}: ${currency === "THB" ? "฿" : "$"}${Number(addon.price).toLocaleString()}`);
+          descLines.push(`${nameMap.get(addon.id) || "Add-on"}: ${currency === "THB" ? "THB" : "USD"} ${Number(addon.price).toLocaleString()}`);
         }
         if (discountAmount > 0) {
-          descLines.push(`• Discount: -${currency === "THB" ? "฿" : "$"}${discountAmount.toLocaleString()}`);
+          descLines.push(`Discount ${currency === "THB" ? "THB" : "USD"} ${discountAmount.toLocaleString()}`);
         }
         if (feeBreakdown.fee > 0) {
-          descLines.push(`• Fee: ${currency === "THB" ? "฿" : "$"}${feeBreakdown.fee.toLocaleString()}`);
+          descLines.push(`Fee ${currency === "THB" ? "THB" : "USD"} ${feeBreakdown.fee.toLocaleString()}`);
         }
 
-        // Stripe expects amount in smallest currency unit (satang/cents)
-        const stripeAmount = Math.round(chargeAmount * 100);
+        const [buyer] = await db
+          .select({
+            email: users.email,
+            phone: users.phone,
+          })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
 
-        const paymentIntent = await stripe.paymentIntents.create(
-          {
-            amount: stripeAmount,
-            currency: currency.toLowerCase(),
-            payment_method_types: paymentMethodTypes,
-            metadata: {
-              orderId: String(order.id),
-              orderNumber,
-              userId: String(userId),
-              packageId: packageId || "",
-              addOnIds: addOnIds.join(",") || "",
-              isAddonOnly: isAddonOnly ? "true" : "false",
-              netAmount: String(totalAmount),
-              fee: String(feeBreakdown.fee),
-              feeMethod,
-              workshopSessionId: workshopSessionId ? String(workshopSessionId) : "",
-              promoCode: promoCode ? promoCode.trim().toUpperCase() : "",
-              discountAmount: String(discountAmount),
-            },
-            description: descLines.join("\n"),
-          },
-          {
-            idempotencyKey: `create-intent-${order.id}`,
-          }
-        );
+        if (!buyer) {
+          return reply.status(404).send({ success: false, error: "User not found" });
+        }
 
-        // 10. Create Payment record
+        const requestedLocale = String(request.headers["x-locale"] || "").toLowerCase();
+        const referer = String(request.headers.referer || "").toLowerCase();
+        const localeForReturn = requestedLocale.startsWith("th") || referer.includes("/th/") ? "th" : "en";
+
+        const apiBaseUrl = (process.env.API_BASE_URL || "http://localhost:3002").replace(/\/$/, "");
+        const webBaseUrl = (
+          process.env.WEB_BASE_URL ||
+          process.env.FRONTEND_BASE_URL ||
+          "http://localhost:3000"
+        ).replace(/\/$/, "");
+
+        const postBackURL =
+          process.env.PAY_SOLUTIONS_POSTBACK_URL ||
+          `${apiBaseUrl}/api/payments/paysolutions/postback`;
+        const returnURL = `${webBaseUrl}/${localeForReturn}/checkout/payment/result?orderId=${order.id}&orderNumber=${encodeURIComponent(orderNumber)}&refno=${paySolutionsRefno}`;
+
+        const secureOrderDetail = descLines.join(" | ").slice(0, 255);
+
+        let secureLink: Awaited<ReturnType<typeof createSecureLink>>;
+        try {
+          secureLink = await createSecureLink({
+            amount: chargeAmount,
+            orderDetail: secureOrderDetail,
+            refNo: paySolutionsRefno,
+            userEmail: buyer.email,
+            userTelNo: normalizePhoneNumber(buyer.phone),
+            returnURL,
+            postBackURL,
+            channel: paySolutionsChannel,
+            currency,
+            oneTime: "Y",
+          });
+        } catch (secureErr) {
+          await db
+            .update(orders)
+            .set({ status: "cancelled" })
+            .where(eq(orders.id, order.id));
+          throw secureErr;
+        }
+
+        // 9. Create Payment record
         await db.insert(payments).values({
           orderId: order.id,
           amount: String(chargeAmount),
           status: "pending",
-          stripeSessionId: paymentIntent.id,
+          paymentChannel: paySolutionsChannel,
+          paymentProvider: "pay_solutions",
+          providerRef: paySolutionsRefno,
+          providerStatus: "PENDING",
+          paySolutionsRefno,
+          paySolutionsChannel,
+          paymentDetails: {
+            requestedMethod: paymentMethod,
+            workshopSessionId: workshopSessionId || null,
+            processingFee: feeBreakdown.processingFee,
+            processingVat: feeBreakdown.processingVat,
+            secureLinkUrl: secureLink.paymentUrl,
+            secureLinkRaw: secureLink.rawResponse,
+          },
         });
 
-        // 10b. Reserve promo usage (pending) if promo was applied
+        // 10. Reserve promo usage (pending) if promo was applied
         if (promoResult.promoCodeId) {
           await reservePromoUsage(promoResult.promoCodeId, userId, order.id, discountAmount);
           fastify.log.info(`[CREATE-INTENT] Reserved promo usage for order ${order.id}, promoId=${promoResult.promoCodeId}`);
         }
 
-        // 11. Return clientSecret + fee breakdown + discount info
+        // 11. Return secure link + fee breakdown + discount info
         return reply.send({
           success: true,
           data: {
-            clientSecret: paymentIntent.client_secret,
+            paymentUrl: secureLink.paymentUrl,
+            refno: paySolutionsRefno,
             orderId: order.id,
             orderNumber,
             subtotal: subtotalBeforeDiscount,
@@ -1036,6 +1166,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             total: chargeAmount,
             currency,
             feeMethod,
+            paymentChannel: paySolutionsChannel,
           },
         });
       } catch (error) {
@@ -1082,14 +1213,14 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // Find the payment record to get the Stripe PaymentIntent ID
+        // Find payment record
         const [payment] = await db
           .select()
           .from(payments)
           .where(eq(payments.orderId, orderId))
           .limit(1);
 
-        if (payment?.stripeSessionId) {
+        if (payment?.paymentProvider === "stripe" && payment.stripeSessionId) {
           // Cancel the Stripe PaymentIntent
           try {
             await stripe.paymentIntents.cancel(payment.stripeSessionId);
@@ -1110,7 +1241,10 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         if (payment) {
           await db
             .update(payments)
-            .set({ status: "cancelled" })
+            .set({
+              status: "cancelled",
+              providerStatus: "CANCELLED",
+            })
             .where(eq(payments.id, payment.id));
         }
 
@@ -1123,6 +1257,207 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
       } catch (error) {
         fastify.log.error(error);
         return reply.status(500).send({ success: false, error: "Failed to cancel payment" });
+      }
+    }
+  );
+
+  // ─────────────────────────────────────────────────────
+  // POST /payments/paysolutions/postback (NO JWT)
+  // Receives asynchronous payment notifications from Pay Solutions
+  // ─────────────────────────────────────────────────────
+  fastify.post(
+    "/paysolutions/postback",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const parsedBody = parsePostbackBody(request.body);
+        const rawPayload = Object.keys(parsedBody).length > 0
+          ? parsedBody
+          : ((request.query as Record<string, unknown>) || {});
+        const normalized = normalizePaySolutionsPayload(rawPayload);
+
+        if (!verifyPaySolutionsPostback(normalized)) {
+          return reply.status(400).send({
+            success: false,
+            error: "Invalid Pay Solutions postback payload",
+          });
+        }
+
+        if (!normalized.referenceNo) {
+          return reply.status(400).send({
+            success: false,
+            error: "Missing ReferenceNo",
+          });
+        }
+
+        const [payment] = await db
+          .select({
+            id: payments.id,
+            orderId: payments.orderId,
+            status: payments.status,
+            paymentChannel: payments.paymentChannel,
+            paymentDetails: payments.paymentDetails,
+            paySolutionsChannel: payments.paySolutionsChannel,
+          })
+          .from(payments)
+          .where(eq(payments.paySolutionsRefno, normalized.referenceNo))
+          .limit(1);
+
+        if (!payment) {
+          fastify.log.warn(`[PAYSOLUTIONS-POSTBACK] Unknown refno: ${normalized.referenceNo}`);
+          return reply.send({ received: true, ignored: true });
+        }
+
+        const postbackChannel = normalizePaySolutionsChannel(
+          normalized.cardType,
+          payment.paySolutionsChannel || payment.paymentChannel
+        );
+
+        const mergedDetails: Record<string, unknown> = {
+          ...(payment.paymentDetails && typeof payment.paymentDetails === "object" && !Array.isArray(payment.paymentDetails)
+            ? (payment.paymentDetails as Record<string, unknown>)
+            : {}),
+          postbackRaw: normalized.raw,
+          latestStatus: normalized.status,
+          latestStatusName: normalized.statusName,
+        };
+
+        // Handle refund events even if payment is already paid
+        if (isPaySolutionsRefundStatus(normalized.status, normalized.statusName)) {
+          const refundProviderStatus = normalized.status || normalized.statusName || "RF";
+          await db
+            .update(payments)
+            .set({
+              status: "refunded",
+              providerStatus: refundProviderStatus,
+              paymentDetails: mergedDetails,
+            })
+            .where(eq(payments.id, payment.id));
+
+          // orders.status enum only allows pending/paid/cancelled — use cancelled for refunds
+          await db
+            .update(orders)
+            .set({ status: "cancelled" })
+            .where(eq(orders.id, payment.orderId));
+
+          fastify.log.info(`[PAYSOLUTIONS-POSTBACK] Refund processed for refno=${normalized.referenceNo}, status=${refundProviderStatus}`);
+          return reply.send({ received: true, status: "refunded" });
+        }
+
+        // Skip duplicate paid postbacks (non-refund)
+        if (payment.status === "paid") {
+          return reply.send({ received: true, duplicate: true });
+        }
+
+        const workshopSessionId = parseWorkshopSessionIdFromDetails(payment.paymentDetails);
+
+        if (isPaySolutionsPaidStatus(normalized.status, normalized.statusName)) {
+          const txResult = await processSuccessfulPayment(
+            fastify,
+            payment.orderId,
+            normalized.orderNo || normalized.referenceNo,
+            workshopSessionId,
+            null,
+            postbackChannel,
+            "pay_solutions",
+            normalized.status || normalized.statusName || "CP",
+            mergedDetails,
+          );
+
+          if (txResult) {
+            await settlePromoUsageSuccess(payment.orderId);
+
+            const { order, user, regCode } = txResult;
+            try {
+              const emailItems = await db
+                .select({
+                  name: ticketTypes.name,
+                  type: orderItems.itemType,
+                  price: orderItems.price,
+                  quantity: orderItems.quantity,
+                })
+                .from(orderItems)
+                .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+                .where(eq(orderItems.orderId, payment.orderId));
+
+              const sortedEmailItems = sortOrderItemsPrimaryFirst(emailItems);
+              const emailSubtotal = sortedEmailItems.reduce(
+                (sum, item) => sum + Number(item.price) * item.quantity,
+                0
+              );
+              const emailDiscount = Number(order.discountAmount || 0);
+              const emailNetAmount = emailSubtotal - emailDiscount;
+              const emailTotal = Number(order.totalAmount);
+              const emailFee = Math.round((emailTotal - emailNetAmount) * 100) / 100;
+
+              const receiptToken = generateReceiptToken(payment.orderId);
+              const apiBaseUrl = process.env.API_BASE_URL || "http://localhost:3002";
+              const receiptDownloadUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
+
+              await sendPaymentReceiptEmail(
+                user.email,
+                user.firstName,
+                user.lastName,
+                order.orderNumber,
+                new Date(),
+                postbackChannel,
+                sortedEmailItems.map((i) => ({
+                  name: i.name,
+                  type: i.type,
+                  price: Number(i.price),
+                })),
+                emailSubtotal,
+                emailFee,
+                emailTotal,
+                order.currency,
+                receiptDownloadUrl,
+                regCode
+              );
+            } catch (emailErr) {
+              fastify.log.error(`[PAYSOLUTIONS-POSTBACK] Failed to send receipt email for order ${payment.orderId}: ${emailErr}`);
+            }
+          }
+
+          return reply.send({ received: true, status: "paid" });
+        }
+
+        if (isPaySolutionsFailedStatus(normalized.status, normalized.statusName)) {
+          await db
+            .update(orders)
+            .set({ status: "cancelled" })
+            .where(eq(orders.id, payment.orderId));
+
+          await db
+            .update(payments)
+            .set({
+              status: "failed",
+              providerStatus: normalized.status || normalized.statusName || "FAILED",
+              paymentChannel: postbackChannel,
+              paymentDetails: mergedDetails,
+            })
+            .where(eq(payments.id, payment.id));
+
+          await cancelPromoUsage(payment.orderId);
+
+          return reply.send({ received: true, status: "failed" });
+        }
+
+        await db
+          .update(payments)
+          .set({
+            paymentChannel: postbackChannel,
+            providerStatus: normalized.status || normalized.statusName || "PENDING",
+            paySolutionsOrderNo: normalized.orderNo || undefined,
+            paymentDetails: mergedDetails,
+          })
+          .where(eq(payments.id, payment.id));
+
+        return reply.send({ received: true, status: "pending" });
+      } catch (error) {
+        fastify.log.error(error);
+        return reply.status(500).send({
+          success: false,
+          error: "Failed to process Pay Solutions postback",
+        });
       }
     }
   );
@@ -1327,21 +1662,27 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
   );
 
   // ─────────────────────────────────────────────────────
-  // GET /payments/verify?payment_intent=pi_xxx (JWT protected)
-  // Used by result page after Stripe redirect
+  // GET /payments/verify?refno=xxxx or ?payment_intent=pi_xxx (JWT protected)
+  // Used by result page after gateway redirect
   // ─────────────────────────────────────────────────────
   fastify.get(
     "/verify",
     { preHandler: [fastify.authenticate] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const { payment_intent: piId } = request.query as { payment_intent?: string };
+      const { payment_intent: piId, refno } = request.query as {
+        payment_intent?: string;
+        refno?: string;
+      };
       const userId = request.user.id;
 
-      if (!piId) {
-        return reply.status(400).send({ success: false, error: "Missing payment_intent parameter" });
+      if (!piId && !refno) {
+        return reply.status(400).send({ success: false, error: "Missing refno or payment_intent parameter" });
       }
 
-      // Find payment by Stripe PaymentIntent ID
+      const paymentWhere = refno
+        ? eq(payments.paySolutionsRefno, refno)
+        : eq(payments.stripeSessionId, piId || "");
+
       const [payment] = await db
         .select({
           id: payments.id,
@@ -1352,9 +1693,15 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           stripeReceiptUrl: payments.stripeReceiptUrl,
           paymentChannel: payments.paymentChannel,
           stripeSessionId: payments.stripeSessionId,
+          paymentProvider: payments.paymentProvider,
+          providerStatus: payments.providerStatus,
+          paySolutionsRefno: payments.paySolutionsRefno,
+          paySolutionsOrderNo: payments.paySolutionsOrderNo,
+          paySolutionsChannel: payments.paySolutionsChannel,
+          paymentDetails: payments.paymentDetails,
         })
         .from(payments)
-        .where(eq(payments.stripeSessionId, piId))
+        .where(paymentWhere)
         .limit(1);
 
       if (!payment) {
@@ -1370,6 +1717,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           totalAmount: orders.totalAmount,
           currency: orders.currency,
           status: orders.status,
+          discountAmount: orders.discountAmount,
+          promoCode: orders.promoCode,
         })
         .from(orders)
         .where(eq(orders.id, payment.orderId))
@@ -1384,55 +1733,153 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
       let justTransitionedToPaid = false;
       let verifyRegCode = "";
 
-      // If still pending, verify with Stripe API
+      // If still pending, verify from provider
       if (payment.status === "pending") {
-        try {
-          const pi = await stripe.paymentIntents.retrieve(piId);
-          fastify.log.info(`[VERIFY] pi.status=${pi.status} for ${piId}`);
+        if (payment.paymentProvider === "stripe" && payment.stripeSessionId) {
+          try {
+            const pi = await stripe.paymentIntents.retrieve(payment.stripeSessionId);
+            fastify.log.info(`[VERIFY] stripe pi.status=${pi.status} for ${payment.stripeSessionId}`);
 
-          if (pi.status === "succeeded") {
-            let receiptUrl: string | null = null;
-            if (pi.latest_charge) {
-              try {
-                const charge = await stripe.charges.retrieve(pi.latest_charge as string);
-                receiptUrl = charge.receipt_url || null;
-              } catch { /* non-critical */ }
+            if (pi.status === "succeeded") {
+              let receiptUrl: string | null = null;
+              if (pi.latest_charge) {
+                try {
+                  const charge = await stripe.charges.retrieve(pi.latest_charge as string);
+                  receiptUrl = charge.receipt_url || null;
+                } catch {
+                  // non-critical
+                }
+              }
+
+              const workshopSessionId = pi.metadata.workshopSessionId
+                ? parseInt(pi.metadata.workshopSessionId)
+                : null;
+              const verifyPaymentChannel = pi.payment_method_types?.[0] || "card";
+
+              const verifyResult = await processSuccessfulPayment(
+                fastify,
+                order.id,
+                payment.stripeSessionId,
+                workshopSessionId,
+                receiptUrl,
+                verifyPaymentChannel,
+              );
+
+              if (verifyResult) {
+                orderStatus = "paid";
+                paymentData = {
+                  ...paymentData,
+                  status: "paid",
+                  paymentChannel: verifyPaymentChannel,
+                  stripeReceiptUrl: receiptUrl,
+                  paidAt: new Date(),
+                  providerStatus: "PAID",
+                };
+                justTransitionedToPaid = true;
+                verifyRegCode = verifyResult.regCode;
+                await settlePromoUsageSuccess(order.id);
+              }
+            } else if (pi.status === "canceled" || pi.status === "requires_payment_method") {
+              await db.update(orders).set({ status: "cancelled" }).where(eq(orders.id, order.id));
+              await db.update(payments).set({ status: "failed" }).where(eq(payments.id, payment.id));
+              await cancelPromoUsage(order.id);
+              orderStatus = "cancelled";
+              paymentData = { ...paymentData, status: "failed", providerStatus: "FAILED" };
             }
-
-            // Read workshopSessionId from metadata
-            const workshopSessionId = pi.metadata.workshopSessionId
-              ? parseInt(pi.metadata.workshopSessionId)
-              : null;
-
-            const verifyPaymentChannel = pi.payment_method_types?.[0] || "card";
-
-            // Process payment: create registrations for ALL items + update soldCount
-            const verifyResult = await processSuccessfulPayment(
-              fastify,
-              order.id,
-              piId,
-              workshopSessionId,
-              receiptUrl,
-              verifyPaymentChannel,
-            );
-
-            if (verifyResult) {
-              orderStatus = "paid";
-              paymentData = { ...paymentData, status: "paid", paymentChannel: verifyPaymentChannel, stripeReceiptUrl: receiptUrl, paidAt: new Date() };
-              justTransitionedToPaid = true;
-              verifyRegCode = verifyResult.regCode;
-              await settlePromoUsageSuccess(order.id);
-              fastify.log.info(`[VERIFY] Updated order ${order.id} to paid`);
-            }
-          } else if (pi.status === "canceled" || pi.status === "requires_payment_method") {
-            await db.update(orders).set({ status: "cancelled" }).where(eq(orders.id, order.id));
-            await db.update(payments).set({ status: "failed" }).where(eq(payments.stripeSessionId, piId));
-            await cancelPromoUsage(order.id);
-            orderStatus = "cancelled";
-            paymentData = { ...paymentData, status: "failed" };
+          } catch (err) {
+            fastify.log.error(`[VERIFY] Stripe API error: ${err}`);
           }
-        } catch (err) {
-          fastify.log.error(`[VERIFY] Stripe API error: ${err}`);
+        } else if (payment.paymentProvider === "pay_solutions" && payment.paySolutionsRefno) {
+          try {
+            const inquiry = await inquiryPayment(payment.paySolutionsRefno);
+            if (inquiry) {
+              const normalized = normalizePaySolutionsPayload(inquiry as Record<string, unknown>);
+              const verifyChannel = normalizePaySolutionsChannel(
+                normalized.cardType,
+                payment.paySolutionsChannel || payment.paymentChannel
+              );
+
+              const mergedDetails: Record<string, unknown> = {
+                ...(payment.paymentDetails && typeof payment.paymentDetails === "object" && !Array.isArray(payment.paymentDetails)
+                  ? (payment.paymentDetails as Record<string, unknown>)
+                  : {}),
+                inquiryRaw: normalized.raw,
+                latestStatus: normalized.status,
+                latestStatusName: normalized.statusName,
+              };
+
+              const workshopSessionId = parseWorkshopSessionIdFromDetails(payment.paymentDetails);
+
+              if (isPaySolutionsPaidStatus(normalized.status, normalized.statusName)) {
+                const verifyResult = await processSuccessfulPayment(
+                  fastify,
+                  order.id,
+                  normalized.orderNo || normalized.referenceNo || payment.paySolutionsRefno,
+                  workshopSessionId,
+                  null,
+                  verifyChannel,
+                  "pay_solutions",
+                  normalized.status || normalized.statusName || "CP",
+                  mergedDetails,
+                );
+
+                if (verifyResult) {
+                  orderStatus = "paid";
+                  paymentData = {
+                    ...paymentData,
+                    status: "paid",
+                    paymentChannel: verifyChannel,
+                    providerStatus: normalized.status || normalized.statusName || "CP",
+                    paidAt: new Date(),
+                  };
+                  justTransitionedToPaid = true;
+                  verifyRegCode = verifyResult.regCode;
+                  await settlePromoUsageSuccess(order.id);
+                }
+              } else if (isPaySolutionsFailedStatus(normalized.status, normalized.statusName)) {
+                await db.update(orders).set({ status: "cancelled" }).where(eq(orders.id, order.id));
+                await db.update(payments).set({
+                  status: "failed",
+                  providerStatus: normalized.status || normalized.statusName || "FAILED",
+                  paymentChannel: verifyChannel,
+                  paymentDetails: mergedDetails,
+                }).where(eq(payments.id, payment.id));
+                await cancelPromoUsage(order.id);
+                orderStatus = "cancelled";
+                paymentData = {
+                  ...paymentData,
+                  status: "failed",
+                  providerStatus: normalized.status || normalized.statusName || "FAILED",
+                  paymentChannel: verifyChannel,
+                };
+              } else if (isPaySolutionsRefundStatus(normalized.status, normalized.statusName)) {
+                const refundProviderStatus = normalized.status || normalized.statusName || "RF";
+                await db.update(orders).set({ status: "cancelled" }).where(eq(orders.id, order.id));
+                await db.update(payments).set({
+                  status: "refunded",
+                  providerStatus: refundProviderStatus,
+                  paymentChannel: verifyChannel,
+                  paymentDetails: mergedDetails,
+                }).where(eq(payments.id, payment.id));
+                orderStatus = "cancelled";
+                paymentData = {
+                  ...paymentData,
+                  status: "refunded",
+                  providerStatus: refundProviderStatus,
+                  paymentChannel: verifyChannel,
+                };
+              } else {
+                await db.update(payments).set({
+                  providerStatus: normalized.status || normalized.statusName || "PENDING",
+                  paySolutionsOrderNo: normalized.orderNo || undefined,
+                  paymentChannel: verifyChannel,
+                  paymentDetails: mergedDetails,
+                }).where(eq(payments.id, payment.id));
+              }
+            }
+          } catch (err) {
+            fastify.log.error(`[VERIFY] Pay Solutions inquiry error: ${err}`);
+          }
         }
       }
 
@@ -1450,24 +1897,9 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         .where(eq(orderItems.orderId, order.id));
 
       const sortedItems = sortOrderItemsPrimaryFirst(items);
-
-      // Calculate subtotal (sum of items) and fee, accounting for discount
       const subtotal = sortedItems.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0);
       const totalPaid = Number(paymentData.amount);
-
-      // Fetch order discount info for accurate fee calculation
-      const [orderFull] = await db
-        .select({
-          discountAmount: orders.discountAmount,
-          promoCode: orders.promoCode,
-          promoDiscountType: orders.promoDiscountType,
-          promoDiscountValue: orders.promoDiscountValue,
-        })
-        .from(orders)
-        .where(eq(orders.id, order.id))
-        .limit(1);
-
-      const verifyDiscount = Number(orderFull?.discountAmount || 0);
+      const verifyDiscount = Number(order.discountAmount || 0);
       const verifyNetAmount = subtotal - verifyDiscount;
       const fee = Math.round((totalPaid - verifyNetAmount) * 100) / 100;
 
@@ -1492,7 +1924,6 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           .limit(1);
 
         if (verifyUser && receiptDownloadUrl) {
-          // Fire-and-forget: don't block the response
           (async () => {
             try {
               await sendPaymentReceiptEmail(
@@ -1511,10 +1942,9 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                 fee > 0 ? fee : 0,
                 totalPaid,
                 order.currency,
-                receiptDownloadUrl!,
+                receiptDownloadUrl,
                 verifyRegCode
               );
-
             } catch (emailErr) {
               fastify.log.error(`[VERIFY] Failed to send receipt email for order ${order.id}: ${emailErr}`);
             }
@@ -1528,6 +1958,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           orderId: order.id,
           orderNumber: order.orderNumber,
           orderStatus,
+          currency: order.currency,
           payment: {
             status: paymentData.status,
             amount: paymentData.amount,
@@ -1545,7 +1976,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           })),
           subtotal: String(subtotal),
           discount: String(verifyDiscount),
-          promoCode: orderFull?.promoCode || null,
+          promoCode: order.promoCode || null,
           fee: fee > 0 ? String(fee) : "0",
         },
       });
@@ -1590,64 +2021,158 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
 
       let [payment] = await db
         .select({
+          id: payments.id,
           status: payments.status,
           amount: payments.amount,
           paidAt: payments.paidAt,
           stripeReceiptUrl: payments.stripeReceiptUrl,
           paymentChannel: payments.paymentChannel,
           stripeSessionId: payments.stripeSessionId,
+          paymentProvider: payments.paymentProvider,
+          providerStatus: payments.providerStatus,
+          paySolutionsRefno: payments.paySolutionsRefno,
+          paySolutionsOrderNo: payments.paySolutionsOrderNo,
+          paySolutionsChannel: payments.paySolutionsChannel,
+          paymentDetails: payments.paymentDetails,
         })
         .from(payments)
         .where(eq(payments.orderId, parseInt(orderId)))
         .limit(1);
 
-      // Stripe API fallback: if DB still "pending", check Stripe directly
-      fastify.log.info(`[STATUS] Order ${orderId} — DB order.status=${orderStatus}, payment.status=${payment?.status}, stripeSessionId=${payment?.stripeSessionId}`);
-      if (payment && payment.status === "pending" && payment.stripeSessionId) {
-        try {
-          fastify.log.info(`[STATUS] Calling Stripe API for PaymentIntent: ${payment.stripeSessionId}`);
-          const pi = await stripe.paymentIntents.retrieve(payment.stripeSessionId);
-          fastify.log.info(`[STATUS] Stripe says: pi.status=${pi.status}`);
+      // Provider fallback: if DB still "pending", check payment provider directly
+      fastify.log.info(`[STATUS] Order ${orderId} — DB order.status=${orderStatus}, payment.status=${payment?.status}, provider=${payment?.paymentProvider}`);
+      if (payment && payment.status === "pending") {
+        if (payment.paymentProvider === "stripe" && payment.stripeSessionId) {
+          try {
+            fastify.log.info(`[STATUS] Calling Stripe API for PaymentIntent: ${payment.stripeSessionId}`);
+            const pi = await stripe.paymentIntents.retrieve(payment.stripeSessionId);
+            fastify.log.info(`[STATUS] Stripe says: pi.status=${pi.status}`);
 
-          if (pi.status === "succeeded") {
-            // Get receipt URL
-            let receiptUrl: string | null = null;
-            if (pi.latest_charge) {
-              try {
-                const charge = await stripe.charges.retrieve(pi.latest_charge as string);
-                receiptUrl = charge.receipt_url || null;
-              } catch { /* non-critical */ }
+            if (pi.status === "succeeded") {
+              // Get receipt URL
+              let receiptUrl: string | null = null;
+              if (pi.latest_charge) {
+                try {
+                  const charge = await stripe.charges.retrieve(pi.latest_charge as string);
+                  receiptUrl = charge.receipt_url || null;
+                } catch {
+                  // non-critical
+                }
+              }
+
+              // Read workshopSessionId from metadata
+              const wsSessionId = pi.metadata.workshopSessionId
+                ? parseInt(pi.metadata.workshopSessionId)
+                : null;
+              const statusPaymentChannel = pi.payment_method_types?.[0] || "card";
+
+              // Process payment: create registrations + update soldCount
+              await processSuccessfulPayment(
+                fastify,
+                order.id,
+                payment.stripeSessionId,
+                wsSessionId,
+                receiptUrl,
+                statusPaymentChannel,
+              );
+
+              // Refresh response data
+              orderStatus = "paid";
+              payment = {
+                ...payment,
+                status: "paid",
+                paymentChannel: statusPaymentChannel,
+                stripeReceiptUrl: receiptUrl,
+                paidAt: new Date(),
+                providerStatus: "PAID",
+              };
+
+              await settlePromoUsageSuccess(order.id);
+              fastify.log.info(`Fallback: updated order ${order.id} to paid via Stripe API check`);
+            } else if (pi.status === "canceled" || pi.status === "requires_payment_method") {
+              await db.update(orders).set({ status: "cancelled" }).where(eq(orders.id, order.id));
+              await db.update(payments).set({ status: "failed" }).where(eq(payments.id, payment.id));
+              await cancelPromoUsage(order.id);
+              orderStatus = "cancelled";
+              payment = { ...payment, status: "failed", providerStatus: "FAILED" };
             }
-
-            // Read workshopSessionId from metadata
-            const wsSessionId = pi.metadata.workshopSessionId
-              ? parseInt(pi.metadata.workshopSessionId)
-              : null;
-            const statusPaymentChannel = pi.payment_method_types?.[0] || "card";
-
-            // Process payment: create registrations + update soldCount
-            await processSuccessfulPayment(
-              fastify,
-              order.id,
-              payment.stripeSessionId!,
-              wsSessionId,
-              receiptUrl,
-              statusPaymentChannel,
-            );
-
-            // Refresh response data
-            orderStatus = "paid";
-            payment = { ...payment, status: "paid", paymentChannel: statusPaymentChannel, stripeReceiptUrl: receiptUrl, paidAt: new Date() };
-
-            fastify.log.info(`Fallback: updated order ${order.id} to paid via Stripe API check`);
-          } else if (pi.status === "canceled") {
-            await db.update(orders).set({ status: "cancelled" }).where(eq(orders.id, order.id));
-            await db.update(payments).set({ status: "cancelled" }).where(eq(payments.stripeSessionId, payment.stripeSessionId));
-            orderStatus = "cancelled";
-            payment = { ...payment, status: "cancelled" };
+          } catch (err) {
+            fastify.log.error(`Stripe API fallback error for order ${order.id}: ${err}`);
           }
-        } catch (err) {
-          fastify.log.error(`Stripe API fallback error for order ${order.id}: ${err}`);
+        } else if (payment.paymentProvider === "pay_solutions" && payment.paySolutionsRefno) {
+          try {
+            const inquiry = await inquiryPayment(payment.paySolutionsRefno);
+            if (inquiry) {
+              const normalized = normalizePaySolutionsPayload(inquiry as Record<string, unknown>);
+              const statusPaymentChannel = normalizePaySolutionsChannel(
+                normalized.cardType,
+                payment.paySolutionsChannel || payment.paymentChannel
+              );
+
+              const mergedDetails: Record<string, unknown> = {
+                ...(payment.paymentDetails && typeof payment.paymentDetails === "object" && !Array.isArray(payment.paymentDetails)
+                  ? (payment.paymentDetails as Record<string, unknown>)
+                  : {}),
+                inquiryRaw: normalized.raw,
+                latestStatus: normalized.status,
+                latestStatusName: normalized.statusName,
+              };
+
+              const wsSessionId = parseWorkshopSessionIdFromDetails(payment.paymentDetails);
+
+              if (isPaySolutionsPaidStatus(normalized.status, normalized.statusName)) {
+                await processSuccessfulPayment(
+                  fastify,
+                  order.id,
+                  normalized.orderNo || normalized.referenceNo || payment.paySolutionsRefno,
+                  wsSessionId,
+                  null,
+                  statusPaymentChannel,
+                  "pay_solutions",
+                  normalized.status || normalized.statusName || "CP",
+                  mergedDetails,
+                );
+
+                orderStatus = "paid";
+                payment = {
+                  ...payment,
+                  status: "paid",
+                  paymentChannel: statusPaymentChannel,
+                  providerStatus: normalized.status || normalized.statusName || "CP",
+                  paidAt: new Date(),
+                  paySolutionsOrderNo: normalized.orderNo || payment.paySolutionsOrderNo,
+                };
+
+                await settlePromoUsageSuccess(order.id);
+                fastify.log.info(`Fallback: updated order ${order.id} to paid via Pay Solutions inquiry`);
+              } else if (isPaySolutionsFailedStatus(normalized.status, normalized.statusName)) {
+                await db.update(orders).set({ status: "cancelled" }).where(eq(orders.id, order.id));
+                await db.update(payments).set({
+                  status: "failed",
+                  providerStatus: normalized.status || normalized.statusName || "FAILED",
+                  paymentChannel: statusPaymentChannel,
+                  paymentDetails: mergedDetails,
+                }).where(eq(payments.id, payment.id));
+                await cancelPromoUsage(order.id);
+                orderStatus = "cancelled";
+                payment = {
+                  ...payment,
+                  status: "failed",
+                  providerStatus: normalized.status || normalized.statusName || "FAILED",
+                  paymentChannel: statusPaymentChannel,
+                };
+              } else {
+                await db.update(payments).set({
+                  providerStatus: normalized.status || normalized.statusName || "PENDING",
+                  paymentChannel: statusPaymentChannel,
+                  paySolutionsOrderNo: normalized.orderNo || undefined,
+                  paymentDetails: mergedDetails,
+                }).where(eq(payments.id, payment.id));
+              }
+            }
+          } catch (err) {
+            fastify.log.error(`Pay Solutions inquiry fallback error for order ${order.id}: ${err}`);
+          }
         }
       }
 
@@ -1663,6 +2188,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             paidAt: payment.paidAt,
             stripeReceiptUrl: payment.stripeReceiptUrl,
             paymentChannel: payment.paymentChannel,
+            paymentProvider: payment.paymentProvider,
+            providerStatus: payment.providerStatus,
           } : null,
         },
       });
