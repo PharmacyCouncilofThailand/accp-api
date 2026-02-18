@@ -80,6 +80,29 @@ function normalizePhoneNumber(phone?: string | null): string {
   return digits;
 }
 
+function getPublicApiBaseUrl(): string {
+  const raw = (process.env.API_BASE_URL || "http://localhost:3002")
+    .trim()
+    .replace(/^['"]|['"]$/g, "")
+    .replace(/\/$/, "");
+
+  const isLocalHost = (value: string): boolean =>
+    value.includes("localhost") || value.includes("127.0.0.1") || value.includes("0.0.0.0");
+
+  // If scheme is missing (e.g. accp-api-production-xxx.up.railway.app), add one.
+  let normalized = /^https?:\/\//i.test(raw)
+    ? raw
+    : `${isLocalHost(raw) ? "http" : "https"}://${raw}`;
+
+  // Railway/email clients may block insecure downloads. If API_BASE_URL is
+  // accidentally configured as http in production, force https for non-local hosts.
+  if (normalized.startsWith("http://") && !isLocalHost(normalized)) {
+    normalized = `https://${normalized.slice("http://".length)}`;
+  }
+
+  return normalized;
+}
+
 function parsePostbackBody(body: unknown): Record<string, unknown> {
   if (!body) return {};
   if (typeof body === "object" && !Array.isArray(body)) {
@@ -612,7 +635,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         let receiptUrl: string | null = null;
         if (primaryRegistration.orderStatus === "paid" && primaryRegistration.orderId) {
           const receiptToken = generateReceiptToken(primaryRegistration.orderId);
-          const apiBaseUrl = process.env.API_BASE_URL || "http://localhost:3002";
+          const apiBaseUrl = getPublicApiBaseUrl();
           receiptUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
         }
 
@@ -1086,7 +1109,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         const referer = String(request.headers.referer || "").toLowerCase();
         const localeForReturn = requestedLocale.startsWith("th") || referer.includes("/th/") ? "th" : "en";
 
-        const apiBaseUrl = (process.env.API_BASE_URL || "http://localhost:3002").replace(/\/$/, "");
+        const apiBaseUrl = getPublicApiBaseUrl();
         const webBaseUrl = (
           process.env.WEB_BASE_URL ||
           process.env.FRONTEND_BASE_URL ||
@@ -1394,7 +1417,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               const emailFee = Math.round((emailTotal - emailNetAmount) * 100) / 100;
 
               const receiptToken = generateReceiptToken(payment.orderId);
-              const apiBaseUrl = process.env.API_BASE_URL || "http://localhost:3002";
+              const apiBaseUrl = getPublicApiBaseUrl();
               const receiptDownloadUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
 
               await sendPaymentReceiptEmail(
@@ -1585,7 +1608,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               const emailFee = Math.round((emailTotal - emailNetAmount) * 100) / 100;
 
               const receiptToken = generateReceiptToken(orderId);
-              const apiBaseUrl = process.env.API_BASE_URL || `http://localhost:3002`;
+              const apiBaseUrl = getPublicApiBaseUrl();
               const receiptDownloadUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
 
               await sendPaymentReceiptEmail(
@@ -1911,7 +1934,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
       let receiptDownloadUrl: string | null = null;
       if (orderStatus === "paid") {
         const receiptToken = generateReceiptToken(order.id);
-        const apiBaseUrl = process.env.API_BASE_URL || "http://localhost:3002";
+        const apiBaseUrl = getPublicApiBaseUrl();
         receiptDownloadUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
       }
 
