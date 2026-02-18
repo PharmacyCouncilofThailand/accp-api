@@ -38,12 +38,17 @@ function round2(value: number): number {
 }
 
 function formatPaySolutionsDate(date: Date): string {
-  const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mi = String(date.getMinutes()).padStart(2, "0");
-  const ss = String(date.getSeconds()).padStart(2, "0");
+  // PaySolutions expects Bangkok time (UTC+7).
+  // Shift UTC timestamp by +7 hours so the formatted string is always in ICT
+  // regardless of the server's local timezone (e.g. Railway runs UTC).
+  const bangkokMs = date.getTime() + 7 * 60 * 60 * 1000;
+  const bkk = new Date(bangkokMs);
+  const yyyy = bkk.getUTCFullYear();
+  const mm = String(bkk.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(bkk.getUTCDate()).padStart(2, "0");
+  const hh = String(bkk.getUTCHours()).padStart(2, "0");
+  const mi = String(bkk.getUTCMinutes()).padStart(2, "0");
+  const ss = String(bkk.getUTCSeconds()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}-${hh}-${mi}-${ss}`;
 }
 
