@@ -1096,9 +1096,13 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         const postBackURL =
           process.env.PAY_SOLUTIONS_POSTBACK_URL ||
           `${apiBaseUrl}/api/payments/paysolutions/postback`;
-        const returnURL = `${webBaseUrl}/${localeForReturn}/checkout/payment/result?orderId=${order.id}&orderNumber=${encodeURIComponent(orderNumber)}&refno=${paySolutionsRefno}`;
+        const returnURL = `${webBaseUrl}/${localeForReturn}/checkout/payment/result?refno=${paySolutionsRefno}`;
 
         const secureOrderDetail = descLines.join(" | ").slice(0, 255);
+
+        fastify.log.info(`[CREATE-INTENT] postBackURL=${postBackURL}`);
+        fastify.log.info(`[CREATE-INTENT] returnURL=${returnURL}`);
+        fastify.log.info(`[CREATE-INTENT] channel=${paySolutionsChannel}, amount=${chargeAmount}, refno=${paySolutionsRefno}`);
 
         let secureLink: Awaited<ReturnType<typeof createSecureLink>>;
         try {
