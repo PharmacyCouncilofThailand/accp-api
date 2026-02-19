@@ -1,24 +1,21 @@
 import axios from "axios";
 
-export type PaySolutionsChannel = "promptpay" | "full" | "amex";
+export type PaySolutionsChannel = "promptpay" | "full";
 
-export interface CreateSecureLinkParams {
+export interface CreateFormSubmitParams {
   amount: number;
   orderDetail: string;
   refNo: string;
   userEmail: string;
-  userTelNo?: string;
-  returnURL: string;
-  postBackURL: string;
   channel: PaySolutionsChannel;
   currency: "THB" | "USD";
-  oneTime?: "Y" | "N";
+  lang?: "TH" | "EN";
 }
 
-export interface CreateSecureLinkResult {
-  paymentUrl: string;
-  encryptedToken: string;
-  rawResponse: Record<string, unknown>;
+export interface CreateFormSubmitResult {
+  actionUrl: string;
+  method: "POST";
+  fields: Record<string, string>;
 }
 
 interface InquiryRow {
@@ -37,27 +34,15 @@ function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
-function formatPaySolutionsDate(date: Date): string {
-  // PaySolutions expects Bangkok time (UTC+7).
-  // Shift UTC timestamp by +7 hours so the formatted string is always in ICT
-  // regardless of the server's local timezone (e.g. Railway runs UTC).
-  const bangkokMs = date.getTime() + 7 * 60 * 60 * 1000;
-  const bkk = new Date(bangkokMs);
-  const yyyy = bkk.getUTCFullYear();
-  const mm = String(bkk.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(bkk.getUTCDate()).padStart(2, "0");
-  const hh = String(bkk.getUTCHours()).padStart(2, "0");
-  const mi = String(bkk.getUTCMinutes()).padStart(2, "0");
-  const ss = String(bkk.getUTCSeconds()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}-${hh}-${mi}-${ss}`;
-}
-
 function getPaySolutionsBaseUrl(): string {
   return process.env.PAY_SOLUTIONS_BASE_URL || "https://apis.paysolutions.asia";
 }
 
-function getPaySolutionsPayUrlBase(): string {
-  return process.env.PAY_SOLUTIONS_PAY_URL_BASE || "https://pay.sn";
+function getPaySolutionsFormActionUrl(): string {
+  return (
+    process.env.PAY_SOLUTIONS_PAYMENT_FORM_ACTION_URL ||
+    "https://payments.paysolutions.asia/payment"
+  );
 }
 
 function getRequiredEnv(name: string): string {
@@ -88,58 +73,30 @@ function toCurrencyCode(currency: "THB" | "USD"): "00" | "01" {
   return currency === "USD" ? "01" : "00";
 }
 
-export async function createSecureLink(
-  params: CreateSecureLinkParams
-): Promise<CreateSecureLinkResult> {
-  const apikey = getRequiredEnv("PAY_SOLUTIONS_API_KEY");
-  const merchantLinkName = getRequiredEnv("PAY_SOLUTIONS_PAYMENT_LINK_NAME");
+function normalizePaySolutionsLang(lang?: "TH" | "EN"): "TH" | "EN" {
+  return lang === "TH" ? "TH" : "EN";
+}
 
-  const secureEndpoint = `${getPaySolutionsBaseUrl()}/secure/v3/secure/encryptz/${encodeURIComponent(merchantLinkName)}`;
-  const expireDate = formatPaySolutionsDate(new Date(Date.now() + 1000 * 60 * 30)); // 30 min
+export function createFormSubmitPayload(
+  params: CreateFormSubmitParams
+): CreateFormSubmitResult {
+  const merchantId = getRequiredEnv("PAY_SOLUTIONS_MERCHANT_ID");
 
-  // Only include parameters documented in Secure Link API spec.
-  // cc (currency) and channel are NOT part of Secure Link — sending them
-  // can cause e101 "Invalid Parameter" when PaySolutions processes the payment.
-  const payload: Record<string, string> = {
-    merchant: merchantLinkName,
-    payValue: String(round2(params.amount)),
-    orderDetail: sanitizeOrderDetail(params.orderDetail),
-    expireDate,
-    userEMail: params.userEmail,
-    userTelNo: params.userTelNo || "",
-    postBackURL: params.postBackURL,
-    returnURL: params.returnURL,
-    monthInstallment: "",
-    bankInstallment: "",
-    oneTime: params.oneTime || "Y",
-    refNo: params.refNo,
+  const fields: Record<string, string> = {
+    merchantid: merchantId,
+    refno: params.refNo,
+    customeremail: params.userEmail.trim(),
+    productdetail: sanitizeOrderDetail(params.orderDetail),
+    total: round2(params.amount).toFixed(2),
+    cc: toCurrencyCode(params.currency),
+    lang: normalizePaySolutionsLang(params.lang),
+    channel: params.channel,
   };
 
-  console.log("[SECURE-LINK] Sending payload:", JSON.stringify(payload, null, 2));
-
-  const response = await axios.post<Record<string, unknown>>(secureEndpoint, payload, {
-    headers: {
-      "Content-Type": "application/json",
-      apikey,
-    },
-    timeout: 20000,
-  });
-
-  const body = response.data || {};
-  console.log("[SECURE-LINK] Response:", JSON.stringify(body, null, 2));
-  const payValue = String(body.payValue || "").trim();
-  const encryptedToken = String(body.orderDetail || "").trim();
-
-  if (!payValue || !encryptedToken) {
-    throw new Error("Invalid Secure Link response from Pay Solutions");
-  }
-
-  const paymentUrl = `${getPaySolutionsPayUrlBase()}/${merchantLinkName}/${encodeURIComponent(payValue)}/${encodeURIComponent(encryptedToken)}`;
-
   return {
-    paymentUrl,
-    encryptedToken,
-    rawResponse: body,
+    actionUrl: getPaySolutionsFormActionUrl(),
+    method: "POST",
+    fields,
   };
 }
 
@@ -287,10 +244,6 @@ export function normalizePaySolutionsChannel(
 ): string {
   const cardTypeNorm = (cardType || "").trim().toUpperCase();
 
-  if (cardTypeNorm === "A" || cardTypeNorm === "AMEX") {
-    return "amex";
-  }
-
   if (
     cardTypeNorm === "Q" ||
     cardTypeNorm === "PP" ||
@@ -305,8 +258,11 @@ export function normalizePaySolutionsChannel(
 
   if (fallbackChannel) {
     const normalizedFallback = fallbackChannel.trim().toLowerCase();
-    if (["promptpay", "amex", "card", "full"].includes(normalizedFallback)) {
-      return normalizedFallback === "full" ? "card" : normalizedFallback;
+    if (["promptpay", "card", "full"].includes(normalizedFallback)) {
+      if (normalizedFallback === "full") {
+        return "card";
+      }
+      return normalizedFallback;
     }
   }
 

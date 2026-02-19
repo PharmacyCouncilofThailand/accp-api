@@ -19,7 +19,7 @@ import { eq, and, sql, inArray, count, desc } from "drizzle-orm";
 import { createPaymentIntentSchema } from "../../schemas/payment.schema.js";
 import type Stripe from "stripe";
 import {
-  createSecureLink,
+  createFormSubmitPayload,
   inquiryPayment,
   isPaySolutionsFailedStatus,
   isPaySolutionsPaidStatus,
@@ -65,19 +65,6 @@ async function generatePaySolutionsRefno(): Promise<string> {
   }
 
   return refno;
-}
-
-function normalizePhoneNumber(phone?: string | null): string {
-  if (!phone) return "";
-  const digits = phone.replace(/\D/g, "");
-  if (!digits) return "";
-  if (digits.startsWith("0")) {
-    return `66${digits.slice(1)}`;
-  }
-  if (digits.startsWith("66")) {
-    return digits;
-  }
-  return digits;
 }
 
 function getPublicApiBaseUrl(): string {
@@ -1065,7 +1052,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // Build order detail for secure link
+        // Build order detail for Pay Solutions redirect
         const ticketIds = [
           ...(primaryTicket ? [primaryTicket.id] : []),
           ...resolvedAddOns.map((a) => a.id),
@@ -1107,46 +1094,37 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
 
         const requestedLocale = String(request.headers["x-locale"] || "").toLowerCase();
         const referer = String(request.headers.referer || "").toLowerCase();
-        const localeForReturn = requestedLocale.startsWith("th") || referer.includes("/th/") ? "th" : "en";
-
-        const apiBaseUrl = getPublicApiBaseUrl();
-        const webBaseUrl = (
-          process.env.WEB_BASE_URL ||
-          process.env.FRONTEND_BASE_URL ||
-          "http://localhost:3000"
-        ).replace(/\/$/, "");
-
-        const postBackURL =
-          process.env.PAY_SOLUTIONS_POSTBACK_URL ||
-          `${apiBaseUrl}/api/payments/paysolutions/postback`;
-        const returnURL = `${webBaseUrl}/${localeForReturn}/checkout/payment/result?refno=${paySolutionsRefno}`;
+        const paySolutionsLang: "TH" | "EN" =
+          requestedLocale.startsWith("th") || referer.includes("/th/") ? "TH" : "EN";
 
         const secureOrderDetail = descLines.join(" | ").slice(0, 255);
 
-        fastify.log.info(`[CREATE-INTENT] postBackURL=${postBackURL}`);
-        fastify.log.info(`[CREATE-INTENT] returnURL=${returnURL}`);
-        fastify.log.info(`[CREATE-INTENT] channel=${paySolutionsChannel}, amount=${chargeAmount}, refno=${paySolutionsRefno}`);
+        let formSubmitPayload: ReturnType<typeof createFormSubmitPayload> | null = null;
 
-        let secureLink: Awaited<ReturnType<typeof createSecureLink>>;
         try {
-          secureLink = await createSecureLink({
+          formSubmitPayload = createFormSubmitPayload({
             amount: chargeAmount,
             orderDetail: secureOrderDetail,
             refNo: paySolutionsRefno,
             userEmail: buyer.email,
-            userTelNo: normalizePhoneNumber(buyer.phone),
-            returnURL,
-            postBackURL,
             channel: paySolutionsChannel,
             currency,
-            oneTime: "Y",
+            lang: paySolutionsLang,
           });
-        } catch (secureErr) {
+
+          fastify.log.info(
+            `[CREATE-INTENT] flow=form_submit actionUrl=${formSubmitPayload.actionUrl}, channel=${paySolutionsChannel}, amount=${chargeAmount}, refno=${paySolutionsRefno}`
+          );
+        } catch (formSubmitErr) {
           await db
             .update(orders)
             .set({ status: "cancelled" })
             .where(eq(orders.id, order.id));
-          throw secureErr;
+          throw formSubmitErr;
+        }
+
+        if (!formSubmitPayload) {
+          throw new Error("Failed to build Pay Solutions form payload");
         }
 
         // 9. Create Payment record
@@ -1165,8 +1143,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             workshopSessionId: workshopSessionId || null,
             processingFee: feeBreakdown.processingFee,
             processingVat: feeBreakdown.processingVat,
-            secureLinkUrl: secureLink.paymentUrl,
-            secureLinkRaw: secureLink.rawResponse,
+            formSubmitActionUrl: formSubmitPayload.actionUrl,
+            formSubmitFields: formSubmitPayload.fields,
           },
         });
 
@@ -1176,11 +1154,11 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           fastify.log.info(`[CREATE-INTENT] Reserved promo usage for order ${order.id}, promoId=${promoResult.promoCodeId}`);
         }
 
-        // 11. Return secure link + fee breakdown + discount info
+        // 11. Return form-submit payload + fee breakdown + discount info
         return reply.send({
           success: true,
           data: {
-            paymentUrl: secureLink.paymentUrl,
+            redirectForm: formSubmitPayload,
             refno: paySolutionsRefno,
             orderId: order.id,
             orderNumber,

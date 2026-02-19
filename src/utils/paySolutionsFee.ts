@@ -10,12 +10,11 @@
 const FEE_CONFIG = {
   promptpay: { rate: 0.01, vat: 0.07 },
   card: { rate: 0.028, vat: 0.07 },
-  amex: { rate: 0.04, vat: 0.07 },
   usd_card: { rate: 0.03, vat: 0.07 },
 } as const;
 
 export type PaySolutionsFeeMethod = keyof typeof FEE_CONFIG;
-export type PaySolutionsPaymentMethod = "qr" | "card" | "amex";
+export type PaySolutionsPaymentMethod = "qr" | "card";
 
 export interface PaySolutionsFeeBreakdown {
   net: number;
@@ -123,19 +122,15 @@ export function resolvePaySolutionsFeeMethod(
 ): PaySolutionsFeeMethod {
   if (currency === "USD") return "usd_card";
   if (paymentMethod === "qr") return "promptpay";
-  if (paymentMethod === "amex") return "amex";
   return "card";
 }
 
 export function resolvePaySolutionsChannel(
   paymentMethod: PaySolutionsPaymentMethod,
   currency: "THB" | "USD"
-): "promptpay" | "full" | "amex" {
-  if (currency === "USD") {
-    return paymentMethod === "amex" ? "amex" : "full";
-  }
+): "promptpay" | "full" {
+  if (currency === "USD") return "full";
 
   if (paymentMethod === "qr") return "promptpay";
-  if (paymentMethod === "amex") return "amex";
   return "full";
 }
