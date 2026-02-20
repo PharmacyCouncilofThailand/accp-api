@@ -1,6 +1,6 @@
 import puppeteer from "puppeteer";
 import { PassThrough } from "stream";
-import { LOGO_SVG } from "../constants/logoSvg";
+import { LOGO_SVG } from "../constants/logoSvg.js";
 
 export interface ReceiptItem {
   name: string;
