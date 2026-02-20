@@ -128,7 +128,7 @@ function buildReceiptHtml(data: ReceiptData): string {
     }
     .billing-col h3 { font-size: 13.5px; font-weight: 700; margin-bottom: 4px; color: #000; }
     .billing-col p { color: #333; line-height: 1.6; }
-    .billing-col .email { color: #1a56db; }
+    .billing-col .email { color: #333; }
     .amount-heading { font-size: 20px; font-weight: 700; margin-bottom: 24px; color: #000; }
     .items-table { width: 100%; border-collapse: collapse; margin-bottom: 0; font-size: 13.5px; }
     .items-table thead tr { border-top: 1px solid #e0e0e0; border-bottom: 1px solid #e0e0e0; }
@@ -198,7 +198,7 @@ function buildReceiptHtml(data: ReceiptData): string {
     <div class="billing-col">
       <h3>Bill to</h3>
       <p>
-        Name: ${escHtml(data.customerName)}<br>
+        Name: ${escHtml(data.taxInvoice?.taxName || data.customerName)}<br>
         ${data.taxInvoice?.taxId ? `Tax ID: ${escHtml(data.taxInvoice.taxId)}<br>` : ""}
         ${data.taxInvoice?.taxFullAddress ? `Address: ${escHtml(data.taxInvoice.taxFullAddress)}<br>` : ""}
         <span class="email">${escHtml(data.customerEmail)}</span>
