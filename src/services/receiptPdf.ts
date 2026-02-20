@@ -1,6 +1,28 @@
 import puppeteer from "puppeteer";
 import { PassThrough } from "stream";
 import { LOGO_SVG } from "../constants/logoSvg.js";
+import { existsSync } from "fs";
+
+/**
+ * Get the executable path for Chromium/Puppeteer.
+ * In production (Alpine Linux), Chromium is at /usr/bin/chromium-browser.
+ * In development, puppeteer will download and use its bundled Chromium.
+ */
+function getChromiumExecutablePath(): string | undefined {
+  // Check for Alpine Linux Chromium location
+  if (existsSync("/usr/bin/chromium-browser")) {
+    return "/usr/bin/chromium-browser";
+  }
+  // Check for other common locations
+  if (existsSync("/usr/bin/chromium")) {
+    return "/usr/bin/chromium";
+  }
+  if (existsSync("/usr/bin/google-chrome")) {
+    return "/usr/bin/google-chrome";
+  }
+  // Let puppeteer use its default (bundled Chromium)
+  return undefined;
+}
 
 export interface ReceiptItem {
   name: string;
@@ -172,9 +194,6 @@ function buildReceiptHtml(data: ReceiptData): string {
 
   <div class="header">
     <h1>Receipt</h1>
-    <div class="logo">
-      ${LOGO_SVG}
-    </div>
   </div>
 
   <div class="meta">
@@ -184,17 +203,6 @@ function buildReceiptHtml(data: ReceiptData): string {
   </div>
 
   <div class="billing-row">
-    <div class="billing-col">
-      <h3>The Pharmacy Council of Thailand</h3>
-      <p>
-        Tax ID: 0994000016379<br>
-        8th Floor, Mahitaladhibesra Building,<br>
-        Ministry of Public Health, 88/19 Moo 4,<br>
-        Tiwanon Road, Talat Khwan,<br>
-        Mueang Nonthaburi District,<br>
-        Nonthaburi 11000, Thailand.
-      </p>
-    </div>
     <div class="billing-col">
       <h3>Bill to</h3>
       <p>
@@ -259,8 +267,10 @@ function buildReceiptHtml(data: ReceiptData): string {
 export async function generateReceiptPdf(data: ReceiptData): Promise<PassThrough> {
   const html = buildReceiptHtml(data);
 
+  const executablePath = getChromiumExecutablePath();
   const browser = await puppeteer.launch({
     headless: true,
+    executablePath,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
   });
 

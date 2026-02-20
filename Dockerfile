@@ -29,7 +29,15 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # Install postgresql-client for health checks and Chromium for puppeteer
-RUN apk add --no-cache postgresql-client chromium \
+# Include dependencies required by Chromium: nss, freetype, harfbuzz, ca-certificates, ttf-freefont
+RUN apk add --no-cache \
+    postgresql-client \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont \
     && rm -rf /var/cache/apk/*
 
 # Copy built files and dependencies
