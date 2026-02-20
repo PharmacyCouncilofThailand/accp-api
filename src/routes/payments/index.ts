@@ -14,6 +14,7 @@ import {
   ticketSessions,
   promoCodes,
   promoCodeUsages,
+  events,
 } from "../../database/schema.js";
 import { eq, and, sql, inArray, count, desc } from "drizzle-orm";
 import { createPaymentIntentSchema } from "../../schemas/payment.schema.js";
@@ -2507,12 +2508,24 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         const total = Number(order.totalAmount);
         const fee = Math.round((total - receiptNetAmount) * 100) / 100;
 
+        // Get event name from registrations
+        const [reg] = await db
+          .select({ eventId: registrations.eventId })
+          .from(registrations)
+          .where(eq(registrations.orderId, order.id))
+          .limit(1);
+
+        const [event] = reg
+          ? await db.select({ eventName: events.eventName }).from(events).where(eq(events.id, reg.eventId)).limit(1)
+          : [];
+
         // 7. Generate PDF
-        const pdfStream = generateReceiptPdf({
+        const pdfStream = await generateReceiptPdf({
           orderNumber: order.orderNumber,
           paidAt: payment?.paidAt || new Date(),
-          paymentChannel: payment?.paymentChannel || "card",
+          paymentChannel: (payment?.paymentChannel === "promptpay" ? "promptpay" : "card") as "promptpay" | "card",
           currency: order.currency,
+          eventName: event?.eventName || undefined,
           items: sortedItems.map((i) => ({
             name: i.name,
             type: i.type as "ticket" | "addon",

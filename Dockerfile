@@ -28,8 +28,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Install postgresql-client for health checks
-RUN apk add --no-cache postgresql-client
+# Install postgresql-client for health checks and Chromium for puppeteer
+RUN apk add --no-cache postgresql-client chromium \
+    && rm -rf /var/cache/apk/*
 
 # Copy built files and dependencies
 COPY --from=builder /app/dist ./dist
