@@ -642,6 +642,12 @@ interface ReceiptEmailItem {
   price: number;
 }
 
+interface TaxInvoiceEmailInfo {
+  taxName: string | null;
+  taxId: string | null;
+  taxFullAddress: string | null;
+}
+
 /**
  * Send payment receipt email with plain text + QR code image URL
  * Called after successful payment (webhook)
@@ -659,6 +665,7 @@ export async function sendPaymentReceiptEmail(
   total: number,
   currency: string,
   receiptDownloadUrl: string,
+  taxInvoice?: TaxInvoiceEmailInfo,
   regCode?: string
 ): Promise<void> {
   const contactEmail = getContactEmail();
@@ -679,6 +686,14 @@ export async function sendPaymentReceiptEmail(
 
   const feeLineText = fee > 0
     ? `  - Payment Processing Fee: ${currencySymbol}${fee.toLocaleString()}\n`
+    : "";
+
+  const taxInvoiceText = taxInvoice
+    ? `
+Tax Invoice Details:
+Name: ${taxInvoice.taxName || "-"}
+Tax ID: ${taxInvoice.taxId || "-"}
+Tax Address: ${taxInvoice.taxFullAddress || "-"}`
     : "";
 
   const websiteUrl = getWebsiteUrl();
@@ -703,6 +718,7 @@ Items:
 ${itemLines}
 ${feeLineText}
 Total Paid: ${currencySymbol}${total.toLocaleString()}
+${taxInvoiceText}
 ${regCode ? `\nRegistration Code: ${regCode}\nPresent this QR code at the event for check-in.` : ""}
 
 Download your receipt (PDF):

@@ -358,6 +358,16 @@ export const orders = pgTable("orders", {
   totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).notNull(),
   currency: varchar("currency", { length: 3 }).notNull().default("THB"),
   status: orderStatusEnum("status").notNull().default("pending"),
+  needTaxInvoice: boolean("need_tax_invoice").notNull().default(false),
+  taxName: varchar("tax_name", { length: 200 }),
+  taxId: varchar("tax_id", { length: 50 }),
+  taxAddress: varchar("tax_address", { length: 500 }),
+  taxSubDistrict: varchar("tax_sub_district", { length: 100 }),
+  taxDistrict: varchar("tax_district", { length: 100 }),
+  taxProvince: varchar("tax_province", { length: 100 }),
+  taxPostalCode: varchar("tax_postal_code", { length: 20 }),
+  taxFullAddress: text("tax_full_address"),
+  taxCreatedAt: timestamp("tax_created_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

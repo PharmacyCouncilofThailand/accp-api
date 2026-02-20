@@ -8,6 +8,12 @@ export interface ReceiptItem {
   quantity: number;
 }
 
+export interface ReceiptTaxInvoiceInfo {
+  taxName: string | null;
+  taxId: string | null;
+  taxFullAddress: string | null;
+}
+
 export interface ReceiptData {
   orderNumber: string;
   paidAt: Date;
@@ -21,6 +27,7 @@ export interface ReceiptData {
   total: number;
   customerName: string;
   customerEmail: string;
+  taxInvoice?: ReceiptTaxInvoiceInfo;
 }
 
 /**
@@ -166,6 +173,33 @@ export function generateReceiptPdf(data: ReceiptData): PassThrough {
   // Move below both columns
   doc.y = Math.max(doc.y, methodLabelY + 30);
   doc.moveDown(2);
+
+  if (data.taxInvoice) {
+    const taxBoxY = doc.y;
+    const taxBoxHeight = 60;
+
+    doc
+      .rect(doc.page.margins.left, taxBoxY, pageWidth, taxBoxHeight)
+      .fill("#fafafa");
+
+    doc
+      .fontSize(9)
+      .font("Helvetica-Bold")
+      .fillColor("#333333")
+      .text("TAX INVOICE DETAILS", leftColX + 10, taxBoxY + 10);
+
+    doc
+      .fontSize(10)
+      .font("Helvetica")
+      .fillColor("#000000")
+      .text(`Name: ${data.taxInvoice.taxName || "-"}`, leftColX + 10, taxBoxY + 24)
+      .text(`Tax ID: ${data.taxInvoice.taxId || "-"}`, leftColX + 10, taxBoxY + 38)
+      .text(`Address: ${data.taxInvoice.taxFullAddress || "-"}`, leftColX + 10, taxBoxY + 52, {
+        width: pageWidth - 20,
+      });
+
+    doc.y = taxBoxY + taxBoxHeight + 28;
+  }
 
   // ─────────────────────────────────────────
   // Items Table

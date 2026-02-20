@@ -55,8 +55,22 @@ function generateRegCode(): string {
 }
 
 async function generatePaySolutionsRefno(): Promise<string> {
+  // Ensure sequence exists (safe for new environments / DB resets)
+  await db.execute(sql`
+    CREATE SEQUENCE IF NOT EXISTS pay_solutions_refno_seq
+    START WITH 100001 INCREMENT BY 1 MINVALUE 100001 NO MAXVALUE CACHE 1
+  `);
+
+  // Bump sequence to at least 100001 if it was created with a lower start
+  // (prevents collision with any refno <= 100000 used in Pay Solutions panel)
+  await db.execute(sql`
+    SELECT setval('pay_solutions_refno_seq',
+      GREATEST(last_value, 100001), true)
+    FROM pay_solutions_refno_seq
+  `);
+
   const rows = await db.execute(sql`
-    select lpad(nextval('pay_solutions_refno_seq')::text, 12, '0') as refno
+    SELECT lpad(nextval('pay_solutions_refno_seq')::text, 12, '0') AS refno
   `);
 
   const refno = String((rows as unknown as Array<{ refno: string }>)[0]?.refno || "");
@@ -140,6 +154,91 @@ function sortOrderItemsPrimaryFirst<T extends { itemType?: string; type?: string
     const bRank = (b.itemType ?? b.type) === "ticket" ? 0 : 1;
     return aRank - bRank;
   });
+}
+
+interface TaxInvoiceInfo {
+  needTaxInvoice: boolean;
+  taxName: string | null;
+  taxId: string | null;
+  taxAddress: string | null;
+  taxSubDistrict: string | null;
+  taxDistrict: string | null;
+  taxProvince: string | null;
+  taxPostalCode: string | null;
+  taxFullAddress: string | null;
+}
+
+function normalizeOptionalText(value?: string | null): string | null {
+  if (value === undefined || value === null) return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function buildTaxFullAddress(parts: {
+  taxAddress: string | null;
+  taxSubDistrict: string | null;
+  taxDistrict: string | null;
+  taxProvince: string | null;
+  taxPostalCode: string | null;
+}): string | null {
+  const values = [
+    parts.taxAddress,
+    parts.taxSubDistrict,
+    parts.taxDistrict,
+    parts.taxProvince,
+    parts.taxPostalCode,
+  ].filter((value): value is string => Boolean(value));
+
+  return values.length > 0 ? values.join(" ") : null;
+}
+
+function buildTaxInvoiceInfo(data: {
+  needTaxInvoice: boolean;
+  taxName?: string;
+  taxId?: string;
+  taxAddress?: string;
+  taxSubDistrict?: string;
+  taxDistrict?: string;
+  taxProvince?: string;
+  taxPostalCode?: string;
+}): TaxInvoiceInfo {
+  if (!data.needTaxInvoice) {
+    return {
+      needTaxInvoice: false,
+      taxName: null,
+      taxId: null,
+      taxAddress: null,
+      taxSubDistrict: null,
+      taxDistrict: null,
+      taxProvince: null,
+      taxPostalCode: null,
+      taxFullAddress: null,
+    };
+  }
+
+  const taxAddress = normalizeOptionalText(data.taxAddress);
+  const taxSubDistrict = normalizeOptionalText(data.taxSubDistrict);
+  const taxDistrict = normalizeOptionalText(data.taxDistrict);
+  const taxProvince = normalizeOptionalText(data.taxProvince);
+  const taxPostalCode = normalizeOptionalText(data.taxPostalCode);
+
+  return {
+    needTaxInvoice: true,
+    taxName: normalizeOptionalText(data.taxName),
+    taxId: normalizeOptionalText(data.taxId),
+    taxAddress,
+    taxSubDistrict,
+    taxDistrict,
+    taxProvince,
+    taxPostalCode,
+    taxFullAddress: buildTaxFullAddress({
+      taxAddress,
+      taxSubDistrict,
+      taxDistrict,
+      taxProvince,
+      taxPostalCode,
+    }),
+  };
 }
 
 /**
@@ -229,7 +328,25 @@ async function processSuccessfulPayment(
   providerStatus: string = "PAID",
   paymentDetails: Record<string, unknown> | null = null,
 ): Promise<{
-  order: { id: number; userId: number; orderNumber: string; totalAmount: string; currency: string; status: string; discountAmount: string | null; promoCode: string | null };
+  order: {
+    id: number;
+    userId: number;
+    orderNumber: string;
+    totalAmount: string;
+    currency: string;
+    status: string;
+    discountAmount: string | null;
+    promoCode: string | null;
+    needTaxInvoice: boolean;
+    taxName: string | null;
+    taxId: string | null;
+    taxAddress: string | null;
+    taxSubDistrict: string | null;
+    taxDistrict: string | null;
+    taxProvince: string | null;
+    taxPostalCode: string | null;
+    taxFullAddress: string | null;
+  };
   user: { email: string; firstName: string; lastName: string };
   regCode: string;
 } | null> {
@@ -792,9 +909,34 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const { packageId, addOnIds, currency, paymentMethod, promoCode, workshopSessionId } = parsed.data;
+      const {
+        packageId,
+        addOnIds,
+        currency,
+        paymentMethod,
+        promoCode,
+        workshopSessionId,
+        needTaxInvoice,
+        taxName,
+        taxId,
+        taxAddress,
+        taxSubDistrict,
+        taxDistrict,
+        taxProvince,
+        taxPostalCode,
+      } = parsed.data;
       const userId = request.user.id;
       const isAddonOnly = !packageId || packageId === "";
+      const taxInvoice = buildTaxInvoiceInfo({
+        needTaxInvoice,
+        taxName,
+        taxId,
+        taxAddress,
+        taxSubDistrict,
+        taxDistrict,
+        taxProvince,
+        taxPostalCode,
+      });
 
       fastify.log.info(`[CREATE-INTENT] paymentMethod=${paymentMethod}, currency=${currency}, packageId=${packageId || "(addon-only)"}, isAddonOnly=${isAddonOnly}`);
 
@@ -965,6 +1107,31 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           }
         }
 
+        if (taxInvoice.needTaxInvoice) {
+          if (!taxInvoice.taxId) {
+            return reply.status(400).send({
+              success: false,
+              code: "INVALID_TAX_ID",
+              error: "Tax ID is required and must be 13 digits",
+            });
+          }
+
+          if (
+            !taxInvoice.taxName ||
+            !taxInvoice.taxAddress ||
+            !taxInvoice.taxSubDistrict ||
+            !taxInvoice.taxDistrict ||
+            !taxInvoice.taxProvince ||
+            !taxInvoice.taxPostalCode
+          ) {
+            return reply.status(400).send({
+              success: false,
+              code: "MISSING_TAX_ADDRESS",
+              error: "Complete tax invoice address is required",
+            });
+          }
+        }
+
         // 5. Apply promo code (if any)
         const subtotalBeforeDiscount = totalAmount;
         let discountAmount = 0;
@@ -1028,6 +1195,16 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             totalAmount: String(chargeAmount),
             currency,
             status: "pending",
+            needTaxInvoice: taxInvoice.needTaxInvoice,
+            taxName: taxInvoice.taxName,
+            taxId: taxInvoice.taxId,
+            taxAddress: taxInvoice.taxAddress,
+            taxSubDistrict: taxInvoice.taxSubDistrict,
+            taxDistrict: taxInvoice.taxDistrict,
+            taxProvince: taxInvoice.taxProvince,
+            taxPostalCode: taxInvoice.taxPostalCode,
+            taxFullAddress: taxInvoice.taxFullAddress,
+            taxCreatedAt: taxInvoice.needTaxInvoice ? new Date() : null,
           })
           .returning();
 
@@ -1415,6 +1592,13 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                 emailTotal,
                 order.currency,
                 receiptDownloadUrl,
+                order.needTaxInvoice
+                  ? {
+                    taxName: order.taxName,
+                    taxId: order.taxId,
+                    taxFullAddress: order.taxFullAddress,
+                  }
+                  : undefined,
                 regCode
               );
             } catch (emailErr) {
@@ -1606,6 +1790,13 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                 emailTotal,
                 order.currency,
                 receiptDownloadUrl,
+                order.needTaxInvoice
+                  ? {
+                    taxName: order.taxName,
+                    taxId: order.taxId,
+                    taxFullAddress: order.taxFullAddress,
+                  }
+                  : undefined,
                 regCode
               );
 
@@ -1724,6 +1915,10 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           status: orders.status,
           discountAmount: orders.discountAmount,
           promoCode: orders.promoCode,
+          needTaxInvoice: orders.needTaxInvoice,
+          taxName: orders.taxName,
+          taxId: orders.taxId,
+          taxFullAddress: orders.taxFullAddress,
         })
         .from(orders)
         .where(eq(orders.id, payment.orderId))
@@ -1948,6 +2143,13 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                 totalPaid,
                 order.currency,
                 receiptDownloadUrl,
+                order.needTaxInvoice
+                  ? {
+                    taxName: order.taxName,
+                    taxId: order.taxId,
+                    taxFullAddress: order.taxFullAddress,
+                  }
+                  : undefined,
                 verifyRegCode
               );
             } catch (emailErr) {
@@ -2231,6 +2433,10 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             currency: orders.currency,
             status: orders.status,
             userId: orders.userId,
+            needTaxInvoice: orders.needTaxInvoice,
+            taxName: orders.taxName,
+            taxId: orders.taxId,
+            taxFullAddress: orders.taxFullAddress,
           })
           .from(orders)
           .where(eq(orders.id, orderId))
@@ -2320,6 +2526,13 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           total,
           customerName: `${user.firstName} ${user.lastName}`,
           customerEmail: user.email,
+          taxInvoice: order.needTaxInvoice
+            ? {
+              taxName: order.taxName,
+              taxId: order.taxId,
+              taxFullAddress: order.taxFullAddress,
+            }
+            : undefined,
         });
 
         // 8. Stream PDF response
