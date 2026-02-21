@@ -721,8 +721,7 @@ Total Paid: ${currencySymbol}${total.toLocaleString()}
 ${taxInvoiceText}
 ${regCode ? `\nRegistration Code: ${regCode}\nPresent this QR code at the event for check-in.` : ""}
 
-Download your receipt (PDF):
-${receiptDownloadUrl}
+Download your receipt (PDF): ${receiptDownloadUrl}
 
 For more information and details about the conference, go to ${websiteUrl}
 
@@ -738,10 +737,16 @@ Bangkok Thailand
   // Build HTML: plain text converted to <br> + QR code image from external URL
   let htmlContent = plainText.replace(/\n/g, '<br>\n');
 
+  // Replace plain receipt URL with a styled "Download Here" link
+  htmlContent = htmlContent.replace(
+    `Download your receipt (PDF): ${receiptDownloadUrl}`,
+    `Download your receipt (PDF): <a href="${receiptDownloadUrl}" style="color: #1a73e8; font-weight: bold; text-decoration: underline;">Download Here</a>`
+  );
+
   if (qrUrl && regCode) {
     const qrHtml = `<br><div style="text-align:center;margin:20px 0;"><img src="${qrUrl}" alt="QR Code: ${regCode}" width="200" height="200" style="display:block;margin:0 auto;" /></div>`;
     htmlContent = htmlContent.replace(
-      `Registration Code: ${regCode}`,
+      `Registration Code: <strong>${regCode}</strong>`,
       `Registration Code: <strong>${regCode}</strong>${qrHtml}`
     );
   }

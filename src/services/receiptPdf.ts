@@ -1,6 +1,5 @@
 import puppeteer from "puppeteer";
 import { PassThrough } from "stream";
-import { LOGO_SVG } from "../constants/logoSvg.js";
 import { existsSync } from "fs";
 
 /**
@@ -59,10 +58,6 @@ function fmtMoney(amount: number, currency: string): string {
   return `${sym}${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function fmtDate(d: Date): string {
-  return d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
-}
-
 function escHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -71,191 +66,133 @@ function escHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function fmtDateTime(d: Date): string {
+  const datePart = d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  const timePart = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+  return `${datePart} at ${timePart}`;
+}
+
+function paymentChannelLabel(ch: "promptpay" | "card"): string {
+  return ch === "promptpay" ? "PromptPay (QR)" : "Credit / Debit Card";
+}
+
+
 function buildReceiptHtml(data: ReceiptData): string {
   const itemRows = data.items
     .map(
       (item) => `
-      <tr>
-        <td>${escHtml(item.name)}</td>
-        <td class="right">${item.quantity}</td>
-        <td class="right">${escHtml(fmtMoney(item.price, data.currency))}</td>
-        <td class="right">${escHtml(fmtMoney(item.price * item.quantity, data.currency))}</td>
-      </tr>`
+                <tr>
+                    <td style="padding: 10px 0;">${escHtml(item.name)}</td>
+                    <td style="text-align: center; padding: 10px 0;">${item.quantity}</td>
+                    <td style="text-align: right; padding: 10px 0;">${escHtml(fmtMoney(item.price, data.currency))}</td>
+                    <td style="text-align: right; padding: 10px 0;">${escHtml(fmtMoney(item.price * item.quantity, data.currency))}</td>
+                </tr>`
     )
     .join("");
 
   const discountRow =
     data.discount && data.discount > 0
-      ? `<tr>
-          <td>${escHtml(data.promoCode ? `Discount (${data.promoCode})` : "Discount")}</td>
-          <td>-${escHtml(fmtMoney(data.discount, data.currency))}</td>
-        </tr>`
+      ? `
+            <tr>
+                <td style="text-align: right; padding: 5px 0;">Discount${data.promoCode ? ` (${escHtml(data.promoCode)})` : ""}</td>
+                <td style="text-align: right; padding: 5px 0;">-${escHtml(fmtMoney(data.discount, data.currency))}</td>
+            </tr>`
       : "";
 
   const feeRow =
     data.fee > 0
-      ? `<tr>
-          <td>Processing fee</td>
-          <td>${escHtml(fmtMoney(data.fee, data.currency))}</td>
-        </tr>`
+      ? `
+            <tr>
+                <td style="text-align: right; padding: 5px 0;">Processing Fee</td>
+                <td style="text-align: right; padding: 5px 0;">${escHtml(fmtMoney(data.fee, data.currency))}</td>
+            </tr>`
       : "";
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Receipt ${escHtml(data.orderNumber)}</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      font-size: 14px;
-      color: #333;
-      background: #fff;
-    }
-    .page {
-      max-width: 760px;
-      margin: 0 auto;
-      padding: 48px 48px 16px;
-      position: relative;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 32px;
-    }
-    .header h1 { font-size: 28px; font-weight: 700; color: #000; }
-    .logo {
-      width: 80px; height: 80px;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .logo svg { width: 100%; height: 100%; }
-    .meta {
-      display: grid;
-      grid-template-columns: 130px 1fr;
-      gap: 2px 0;
-      margin-bottom: 28px;
-      font-size: 13.5px;
-    }
-    .meta .label { color: #555; }
-    .meta .value { color: #000; font-weight: 600; }
-    .billing-row {
-      display: flex; gap: 60px;
-      margin-bottom: 32px; font-size: 13.5px;
-    }
-    .billing-col h3 { font-size: 13.5px; font-weight: 700; margin-bottom: 4px; color: #000; }
-    .billing-col p { color: #333; line-height: 1.6; }
-    .billing-col .email { color: #333; }
-    .amount-heading { font-size: 20px; font-weight: 700; margin-bottom: 24px; color: #000; }
-    .items-table { width: 100%; border-collapse: collapse; margin-bottom: 0; font-size: 13.5px; }
-    .items-table thead tr { border-top: 1px solid #e0e0e0; border-bottom: 1px solid #e0e0e0; }
-    .items-table th {
-      padding: 8px 0; text-align: left;
-      font-weight: 400; color: #666; font-size: 12.5px;
-    }
-    .items-table th.right, .items-table td.right { text-align: right; }
-    .items-table tbody tr { border-bottom: 1px solid #e0e0e0; }
-    .items-table td { padding: 14px 0; vertical-align: top; color: #333; }
-    .totals { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 0; }
-    .totals tr td { padding: 6px 0; color: #333; }
-    .totals tr td:first-child { text-align: left; color: #555; }
-    .totals tr td:last-child { text-align: right; }
-    .totals tr.total-row td { border-top: 1px solid #e0e0e0; padding-top: 8px; color: #333; }
-    .totals tr.amount-paid td { font-weight: 700; color: #000; padding-top: 4px; }
-    .totals-wrapper { display: flex; justify-content: flex-end; }
-    .totals-inner { width: 340px; }
-    .section-gap { margin: 36px 0 20px; }
-    h2.section-title { font-size: 18px; font-weight: 700; color: #000; margin-bottom: 16px; }
-    .payment-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-    .payment-table thead tr { border-bottom: 1px solid #e0e0e0; }
-    .payment-table th {
-      padding: 8px 0; text-align: left;
-      font-weight: 400; color: #666; font-size: 12.5px;
-    }
-    .payment-table td { padding: 14px 0; color: #333; border-bottom: 1px solid #e0e0e0; }
-    .footer {
-      margin-top: auto; border-top: 1px solid #e0e0e0; padding-top: 16px; padding-bottom: 50px;
-      display: flex; justify-content: flex-end;
-      font-size: 12px; color: #888;
-      position: absolute;
-      bottom: 0;
-      left: 48px;
-      right: 48px;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACCP 2026 - Payment Receipt</title>
 </head>
-<body>
-<div class="page">
+<body style="font-family: sans-serif; background-color: #ffffff; padding: 0; margin: 0;">
 
-  <div class="header">
-    <h1>Receipt</h1>
-  </div>
+    <div style="max-width: 800px; margin: 0 auto; background-color: #ffffff; padding: 40px 48px; height: 100vh; display: flex; flex-direction: column; box-sizing: border-box;">
 
-  <div class="meta">
-    <span class="label">Event</span><span class="value">${escHtml(data.eventName || "ACCP 2026")}</span>
-    <span class="label">Receipt number</span><span class="value">${escHtml(data.orderNumber)}</span>
-    <span class="label">Date paid</span><span class="value">${escHtml(fmtDate(data.paidAt))}</span>
-  </div>
+        <!-- Header Section -->
+        <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="margin: 0; font-size: 30px;">ACCP 2026</h1>
+            <h2 style="margin: 5px 0; font-size: 22px; font-weight: normal;">25th Asian Conference on Clinical Pharmacy</h2>
+            <p style="margin: 0; font-size: 14px; color: #333;">July 9-11, 2026 | Centara Grand, Bangkok, Thailand</p>
+        </div>
 
-  <div class="billing-row">
-    <div class="billing-col">
-      <h3>Bill to</h3>
-      <p>
-        Name: ${escHtml(data.taxInvoice?.taxName || data.customerName)}<br>
-        ${data.taxInvoice?.taxId ? `Tax ID: ${escHtml(data.taxInvoice.taxId)}<br>` : ""}
-        ${data.taxInvoice?.taxFullAddress ? `Address: ${escHtml(data.taxInvoice.taxFullAddress)}<br>` : ""}
-        <span class="email">${escHtml(data.customerEmail)}</span>
-      </p>
+        <!-- Title -->
+        <h3 style="text-align: center; margin-bottom: 30px; letter-spacing: 1px;">PAYMENT RECEIPT</h3>
+
+        <!-- Information Grid -->
+        <table style="width: 100%; margin-bottom: 30px; font-size: 14px;">
+            <tr>
+                <td style="width: 50%; vertical-align: top; padding-right: 20px;">
+                    <p style="margin: 0 0 5px 0; font-weight: bold; color: #000;">RECEIPT NUMBER</p>
+                    <p style="margin: 0 0 20px 0; color: #555;">${escHtml(data.orderNumber)}</p>
+
+                    <p style="margin: 0 0 5px 0; font-weight: bold; color: #000;">CUSTOMER</p>
+                    <p style="margin: 0; color: #555;">${escHtml(data.taxInvoice?.taxName || data.customerName)}</p>
+                    <p style="margin: 0; color: #555;">${escHtml(data.customerEmail)}</p>
+                    ${data.taxInvoice?.taxId ? `<p style="margin: 0; color: #555;">Tax ID: ${escHtml(data.taxInvoice.taxId)}</p>` : ""}
+                    ${data.taxInvoice?.taxFullAddress ? `<p style="margin: 0; color: #555;">Address: ${escHtml(data.taxInvoice.taxFullAddress)}</p>` : ""}
+                </td>
+                <td style="width: 50%; vertical-align: top; padding-left: 20px;">
+                    <p style="margin: 0 0 5px 0; font-weight: bold; color: #000;">DATE PAID</p>
+                    <p style="margin: 0 0 20px 0; color: #555;">${escHtml(fmtDateTime(data.paidAt))}</p>
+
+                    <p style="margin: 0 0 5px 0; font-weight: bold; color: #000;">PAYMENT METHOD</p>
+                    <p style="margin: 0; color: #555;">${escHtml(paymentChannelLabel(data.paymentChannel))}</p>
+                </td>
+            </tr>
+        </table>
+
+        <!-- Item Table -->
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 14px;">
+            <thead>
+                <tr style="border-bottom: 2px solid #000;">
+                    <th style="text-align: left; padding: 10px 0;">DESCRIPTION</th>
+                    <th style="text-align: center; padding: 10px 0;">QTY</th>
+                    <th style="text-align: right; padding: 10px 0;">UNIT PRICE</th>
+                    <th style="text-align: right; padding: 10px 0;">AMOUNT</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${itemRows}
+                <tr style="border-bottom: 1px solid #ccc;">
+                    <td style="padding: 0;" colspan="4"></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <!-- Totals Table -->
+        <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <tr>
+                <td style="text-align: right; padding: 5px 0; width: 70%;">Subtotal</td>
+                <td style="text-align: right; padding: 5px 0; width: 30%;">${escHtml(fmtMoney(data.subtotal, data.currency))}</td>
+            </tr>
+            ${discountRow}
+            ${feeRow}
+            <tr>
+                <td style="text-align: right; padding: 10px 0; font-weight: bold; font-size: 16px;">Total Paid</td>
+                <td style="text-align: right; padding: 10px 0; font-weight: bold; font-size: 16px; border-top: 1px solid #000; border-bottom: 3px double #000;">${escHtml(fmtMoney(data.total, data.currency))}</td>
+            </tr>
+        </table>
+
+        <!-- Footer -->
+        <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid #eee; text-align: center; font-size: 12px; color: #666; line-height: 1.6;">
+            <p style="margin: 0;">This receipt was generated by the ACCP 2026 Conference System.</p>
+            <p style="margin: 0;">For questions, contact accpbangkok2026@gmail.com</p>
+            <p style="margin: 0;">25th Asian Conference on Clinical Pharmacy | Bangkok, Thailand</p>
+        </div>
+
     </div>
-  </div>
 
-  <div class="amount-heading">${escHtml(fmtMoney(data.total, data.currency))} paid on ${escHtml(fmtDate(data.paidAt))}</div>
-
-  <table class="items-table">
-    <thead>
-      <tr>
-        <th style="width:55%">Description</th>
-        <th class="right" style="width:10%">Qty</th>
-        <th class="right" style="width:20%">Unit price</th>
-        <th class="right" style="width:15%">Amount</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${itemRows}
-    </tbody>
-  </table>
-
-  <div class="totals-wrapper" style="margin-top:8px;">
-    <div class="totals-inner">
-      <table class="totals">
-        <tr>
-          <td>Subtotal</td>
-          <td>${escHtml(fmtMoney(data.subtotal, data.currency))}</td>
-        </tr>
-        ${discountRow}
-        ${feeRow}
-        <tr class="total-row">
-          <td>Total</td>
-          <td>${escHtml(fmtMoney(data.total, data.currency))}</td>
-        </tr>
-        <tr class="amount-paid">
-          <td>Amount paid</td>
-          <td>${escHtml(fmtMoney(data.total, data.currency))}</td>
-        </tr>
-      </table>
-    </div>
-  </div>
-
-  <div class="footer">
-    <span>Page 1 of 1</span>
-  </div>
-
-</div>
 </body>
 </html>`;
 }
