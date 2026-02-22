@@ -90,6 +90,7 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     .from(eventSpeakers)
                     .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
                     .where(inArray(eventSpeakers.sessionId, workshopSessionIds))
+                    .orderBy(speakers.id)
                 : [];
 
             // Get enrollment counts from registration_sessions junction
