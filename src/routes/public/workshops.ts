@@ -1,7 +1,34 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { sessions, events, ticketTypes, registrations, ticketSessions, eventSpeakers, speakers } from "../../database/schema.js";
+import { sessions, events, ticketTypes, registrations, registrationSessions, ticketSessions, eventSpeakers, speakers } from "../../database/schema.js";
 import { eq, desc, sql, and, count, inArray } from "drizzle-orm";
+
+function parseAllowedRoles(raw: string | null): string[] | null {
+    if (!raw) return null;
+
+    const normalized = raw.trim();
+    if (!normalized) return null;
+
+    if (normalized.startsWith("[")) {
+        try {
+            const parsed = JSON.parse(normalized);
+            if (Array.isArray(parsed)) {
+                return parsed
+                    .map((role) => String(role).trim())
+                    .filter(Boolean);
+            }
+        } catch {
+            // Fall through to CSV parsing
+        }
+    }
+
+    const csvRoles = normalized
+        .split(",")
+        .map((role) => role.trim())
+        .filter(Boolean);
+
+    return csvRoles.length > 0 ? csvRoles : null;
+}
 
 export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
     // Get all published workshop sessions (public, no auth required)
@@ -38,6 +65,7 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     startTime: sessions.startTime,
                     endTime: sessions.endTime,
                     maxCapacity: sessions.maxCapacity,
+                    agenda: sessions.agenda,
                 })
                 .from(sessions)
                 .where(
@@ -64,12 +92,33 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     .where(inArray(eventSpeakers.sessionId, workshopSessionIds))
                 : [];
 
-            // Get enrollment counts for each session
-            // First get ticket types for these sessions
+            // Get enrollment counts from registration_sessions junction
             const sessionIds = workshopSessions.map(s => s.id);
 
-            // Get ticket types that are linked to these sessions
-            // Get ticket types linked via ticketSessions (new way)
+            // Count confirmed registrations per session
+            const enrollmentMap = new Map<number, number>();
+            if (sessionIds.length > 0) {
+                const enrollCounts = await db
+                    .select({
+                        sessionId: registrationSessions.sessionId,
+                        count: count(),
+                    })
+                    .from(registrationSessions)
+                    .innerJoin(registrations, eq(registrationSessions.registrationId, registrations.id))
+                    .where(
+                        and(
+                            inArray(registrationSessions.sessionId, sessionIds),
+                            eq(registrations.status, "confirmed")
+                        )
+                    )
+                    .groupBy(registrationSessions.sessionId);
+
+                for (const r of enrollCounts) {
+                    enrollmentMap.set(r.sessionId, r.count);
+                }
+            }
+
+            // Get ticket types linked to these sessions (for pricing display)
             const linkedTicketTypes = sessionIds.length > 0
                 ? await db
                     .select({
@@ -102,46 +151,15 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     .where(inArray(ticketTypes.sessionId, sessionIds))
                 : [];
 
-            // Merge both
+            // Merge both for ticket display
             const sessionTicketTypes = [...linkedTicketTypes, ...legacyTicketTypes];
 
-            // Get registration counts per ticket type
-            const ticketTypeIds = sessionTicketTypes.map(t => t.ticketTypeId);
-
-            interface RegistrationCount {
-                ticketTypeId: number;
-                count: number;
-            }
-
-            let registrationCounts: RegistrationCount[] = [];
-            if (ticketTypeIds.length > 0) {
-                registrationCounts = await db
-                    .select({
-                        ticketTypeId: registrations.ticketTypeId,
-                        count: count(),
-                    })
-                    .from(registrations)
-                    .where(
-                        and(
-                            inArray(registrations.ticketTypeId, ticketTypeIds),
-                            eq(registrations.status, "confirmed")
-                        )
-                    )
-                    .groupBy(registrations.ticketTypeId);
-            }
-
-            // Build enrollment map: sessionId -> count
-            const enrollmentMap = new Map<number, number>();
+            // Build session tickets map and sale date map
             const saleDateMap = new Map<number, Date | null>();
             const sessionTicketsMap = new Map<number, typeof sessionTicketTypes>();
 
-
             for (const tt of sessionTicketTypes) {
                 if (tt.sessionId) {
-                    const regCount = registrationCounts.find(r => r.ticketTypeId === tt.ticketTypeId);
-                    const currentCount = enrollmentMap.get(tt.sessionId) || 0;
-                    enrollmentMap.set(tt.sessionId, currentCount + (regCount?.count || 0));
-
                     // Collect tickets for this session
                     const tickets = sessionTicketsMap.get(tt.sessionId) || [];
                     tickets.push(tt);
@@ -172,7 +190,7 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     name: t.name,
                     price: t.price,
                     currency: t.currency,
-                    allowedRoles: t.allowedRoles ? JSON.parse(t.allowedRoles as string) : null,
+                    allowedRoles: parseAllowedRoles(t.allowedRoles),
                     saleStartDate: t.saleStartDate
                 }));
 
@@ -206,9 +224,10 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     date: event?.startDate ? new Date(event.startDate).toLocaleDateString('en-US', {
                         month: 'long',
                         day: 'numeric',
-                        year: 'numeric'
+                        year: 'numeric',
+                        timeZone: 'Asia/Bangkok'
                     }) : '',
-                    time: `${start.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} - ${end.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}`,
+                    time: `${start.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' })} - ${end.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' })}`,
                     duration: durationHours >= 6 ? 'fullDay' : 'halfDay',
                     venue: session.room || event?.location || '',
                     capacity: session.maxCapacity || 0,
@@ -221,6 +240,7 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     instructors: instructors,
                     color: colors[index % colors.length],
                     icon: icons[index % icons.length],
+                    agenda: session.agenda || null,
                     isFull,
                     saleStartDate: saleStartDate ? saleStartDate.toISOString() : null,
                 };

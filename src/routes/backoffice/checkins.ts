@@ -1,11 +1,18 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { checkIns, registrations, users, events, ticketTypes } from "../../database/schema.js";
+import {
+    registrations,
+    registrationSessions,
+    sessions,
+    backofficeUsers,
+    events,
+    ticketTypes,
+} from "../../database/schema.js";
 import { checkinListSchema, createCheckinSchema } from "../../schemas/checkins.schema.js";
-import { eq, desc, ilike, and, or, count } from "drizzle-orm";
+import { eq, desc, ilike, and, or, count, isNotNull } from "drizzle-orm";
 
 export default async function (fastify: FastifyInstance) {
-    // List Check-ins
+    // List Check-ins (reads from registration_sessions WHERE checkedInAt IS NOT NULL)
     fastify.get("", async (request, reply) => {
         const queryResult = checkinListSchema.safeParse(request.query);
         if (!queryResult.success) {
@@ -16,7 +23,7 @@ export default async function (fastify: FastifyInstance) {
         const offset = (page - 1) * limit;
 
         try {
-            const conditions = [];
+            const conditions: any[] = [isNotNull(registrationSessions.checkedInAt)];
             if (eventId) conditions.push(eq(registrations.eventId, eventId));
             if (search) {
                 conditions.push(
@@ -28,38 +35,40 @@ export default async function (fastify: FastifyInstance) {
                 );
             }
 
-            const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+            const whereClause = and(...conditions);
 
             // Count total
             const [{ totalCount }] = await db
                 .select({ totalCount: count() })
-                .from(checkIns)
-                .leftJoin(registrations, eq(checkIns.registrationId, registrations.id))
+                .from(registrationSessions)
+                .innerJoin(registrations, eq(registrationSessions.registrationId, registrations.id))
                 .where(whereClause);
 
             // Fetch data
             const checkinList = await db
                 .select({
-                    id: checkIns.id,
-                    scannedAt: checkIns.scannedAt,
+                    id: registrationSessions.id,
+                    scannedAt: registrationSessions.checkedInAt,
                     regCode: registrations.regCode,
                     firstName: registrations.firstName,
                     lastName: registrations.lastName,
                     email: registrations.email,
                     ticketName: ticketTypes.name,
+                    sessionName: sessions.sessionName,
                     eventName: events.eventName,
                     scannedBy: {
-                        firstName: users.firstName,
-                        lastName: users.lastName,
+                        firstName: backofficeUsers.firstName,
+                        lastName: backofficeUsers.lastName,
                     }
                 })
-                .from(checkIns)
-                .leftJoin(registrations, eq(checkIns.registrationId, registrations.id))
-                .leftJoin(ticketTypes, eq(checkIns.ticketTypeId, ticketTypes.id))
+                .from(registrationSessions)
+                .innerJoin(registrations, eq(registrationSessions.registrationId, registrations.id))
+                .leftJoin(ticketTypes, eq(registrationSessions.ticketTypeId, ticketTypes.id))
+                .leftJoin(sessions, eq(registrationSessions.sessionId, sessions.id))
                 .leftJoin(events, eq(registrations.eventId, events.id))
-                .leftJoin(users, eq(checkIns.scannedBy, users.id))
+                .leftJoin(backofficeUsers, eq(registrationSessions.checkedInBy, backofficeUsers.id))
                 .where(whereClause)
-                .orderBy(desc(checkIns.scannedAt))
+                .orderBy(desc(registrationSessions.checkedInAt))
                 .limit(limit)
                 .offset(offset);
 
@@ -79,22 +88,32 @@ export default async function (fastify: FastifyInstance) {
     });
 
     // Create Check-in (Scan)
+    // Supports 3 modes:
+    //   1. { regCode } → return session list for staff to choose
+    //   2. { regCode, sessionId } → check-in specific session
+    //   3. { regCode, checkInAll: true } → check-in all sessions at once
     fastify.post("", async (request, reply) => {
         const bodyResult = createCheckinSchema.safeParse(request.body);
         if (!bodyResult.success) {
             return reply.status(400).send({ error: "Invalid body", details: bodyResult.error.flatten() });
         }
 
-        const { regCode } = bodyResult.data;
-        const userId = (request as any).user?.id; // Assuming auth middleware populates this
+        const { regCode, sessionId, checkInAll } = bodyResult.data;
+        const staffUserId = (request as any).user?.id;
 
         try {
-            // Find registration
+            // Find registration with all linked sessions
             const registration = await db.query.registrations.findFirst({
-                where: ilike(registrations.regCode, regCode), // Case insensitive
+                where: ilike(registrations.regCode, regCode),
                 with: {
                     event: true,
                     ticketType: true,
+                    registrationSessions: {
+                        with: {
+                            session: true,
+                            ticketType: true,
+                        },
+                    },
                 }
             });
 
@@ -110,36 +129,102 @@ export default async function (fastify: FastifyInstance) {
                 });
             }
 
-            // Check if already checked in
-            const existingCheckin = await db.query.checkIns.findFirst({
-                where: eq(checkIns.registrationId, registration.id),
-            });
+            const regSessions = registration.registrationSessions || [];
 
-            if (existingCheckin) {
-                return reply.status(409).send({
-                    error: "Already checked in",
-                    code: "ALREADY_CHECKED_IN",
-                    checkin: existingCheckin,
-                    registration
+            // ─── Case 1: Check-in ALL sessions at once ───
+            if (checkInAll) {
+                const unchecked = regSessions.filter((rs: any) => !rs.checkedInAt);
+                if (unchecked.length === 0) {
+                    return reply.status(409).send({
+                        error: "All sessions already checked in",
+                        code: "ALREADY_CHECKED_IN",
+                    });
+                }
+
+                for (const rs of unchecked) {
+                    await db
+                        .update(registrationSessions)
+                        .set({ checkedInAt: new Date(), checkedInBy: staffUserId })
+                        .where(eq(registrationSessions.id, rs.id));
+                }
+
+                return reply.send({
+                    success: true,
+                    checkedInCount: unchecked.length,
+                    registration: {
+                        id: registration.id,
+                        regCode: registration.regCode,
+                        firstName: registration.firstName,
+                        lastName: registration.lastName,
+                        ticketName: (registration as any).ticketType?.name,
+                        eventName: (registration as any).event?.eventName,
+                    },
                 });
             }
 
-            // Create check-in
-            const [newCheckin] = await db.insert(checkIns).values({
-                registrationId: registration.id,
-                ticketTypeId: registration.ticketTypeId,
-                scannedBy: userId,
-                scannedAt: new Date(),
-            }).returning();
+            // ─── Case 2: Check-in a specific session ───
+            if (sessionId) {
+                const regSession = regSessions.find((rs: any) => rs.sessionId === sessionId);
 
-            return reply.send({
-                success: true,
-                checkin: newCheckin,
-                registration: {
-                    ...registration,
-                    ticketName: (registration as any).ticketType?.name,
-                    eventName: (registration as any).event?.eventName
+                if (!regSession) {
+                    return reply.status(400).send({
+                        error: "No access to this session",
+                        code: "NO_ACCESS",
+                    });
                 }
+
+                if (regSession.checkedInAt) {
+                    return reply.status(409).send({
+                        error: "Already checked in for this session",
+                        code: "ALREADY_CHECKED_IN",
+                        checkedInAt: regSession.checkedInAt,
+                        sessionName: (regSession as any).session?.sessionName,
+                    });
+                }
+
+                await db
+                    .update(registrationSessions)
+                    .set({ checkedInAt: new Date(), checkedInBy: staffUserId })
+                    .where(eq(registrationSessions.id, regSession.id));
+
+                return reply.send({
+                    success: true,
+                    checkedInSession: {
+                        sessionId: regSession.sessionId,
+                        sessionName: (regSession as any).session?.sessionName,
+                        ticketName: (regSession as any).ticketType?.name,
+                    },
+                    registration: {
+                        id: registration.id,
+                        regCode: registration.regCode,
+                        firstName: registration.firstName,
+                        lastName: registration.lastName,
+                        ticketName: (registration as any).ticketType?.name,
+                        eventName: (registration as any).event?.eventName,
+                    },
+                });
+            }
+
+            // ─── Case 3: No sessionId → return session list for staff to choose ───
+            return reply.send({
+                registration: {
+                    id: registration.id,
+                    regCode: registration.regCode,
+                    firstName: registration.firstName,
+                    lastName: registration.lastName,
+                    email: registration.email,
+                    status: registration.status,
+                    ticketName: (registration as any).ticketType?.name,
+                    eventName: (registration as any).event?.eventName,
+                },
+                sessions: regSessions.map((rs: any) => ({
+                    id: rs.id,
+                    sessionId: rs.sessionId,
+                    sessionName: rs.session?.sessionName,
+                    sessionType: rs.session?.sessionType,
+                    ticketName: rs.ticketType?.name,
+                    checkedInAt: rs.checkedInAt,
+                })),
             });
 
         } catch (error) {

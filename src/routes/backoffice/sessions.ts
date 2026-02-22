@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { sessions, events, staffEventAssignments, speakers, eventSpeakers } from "../../database/schema.js";
+import { sessions, events, staffEventAssignments, speakers, eventSpeakers, registrations, registrationSessions } from "../../database/schema.js";
 import { eq, desc, ilike, and, count, inArray } from "drizzle-orm";
 import { z } from "zod";
 
@@ -82,6 +82,7 @@ export default async function (fastify: FastifyInstance) {
                     room: sessions.room,
                     maxCapacity: sessions.maxCapacity,
                     isMainSession: sessions.isMainSession,
+                    agenda: sessions.agenda,
                     eventCode: events.eventCode,
                 })
                 .from(sessions)
@@ -90,6 +91,30 @@ export default async function (fastify: FastifyInstance) {
                 .orderBy(desc(sessions.startTime))
                 .limit(limit)
                 .offset(offset);
+
+            // Count enrollment per session from registration_sessions junction
+            const sessionIds = sessionsWithMeta.map(s => s.id);
+            let enrollMap = new Map<number, number>();
+            if (sessionIds.length > 0) {
+                const enrollCounts = await db
+                    .select({
+                        sessionId: registrationSessions.sessionId,
+                        count: count(),
+                    })
+                    .from(registrationSessions)
+                    .innerJoin(registrations, eq(registrationSessions.registrationId, registrations.id))
+                    .where(
+                        and(
+                            inArray(registrationSessions.sessionId, sessionIds),
+                            eq(registrations.status, "confirmed")
+                        )
+                    )
+                    .groupBy(registrationSessions.sessionId);
+
+                enrollMap = new Map(
+                    enrollCounts.map(r => [r.sessionId, r.count])
+                );
+            }
 
             // Fetch speakers for these sessions and aggregate
             const finalSessions = await Promise.all(sessionsWithMeta.map(async (s) => {
@@ -105,6 +130,7 @@ export default async function (fastify: FastifyInstance) {
 
                 return {
                     ...s,
+                    enrolledCount: enrollMap.get(s.id) || 0,
                     speakers: sSpeakers.map(sp => `${sp.firstName} ${sp.lastName}`),
                     speakerIds: sSpeakers.map(sp => sp.id)
                 };

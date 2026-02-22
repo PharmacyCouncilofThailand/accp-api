@@ -8,6 +8,7 @@ import {
   eventImages,
   staffEventAssignments,
   registrations,
+  registrationSessions,
   speakers,
   eventSpeakers,
 } from "../../database/schema.js";
@@ -27,6 +28,60 @@ import type {
   SessionUpdatePayload,
   TicketTypeUpdatePayload,
 } from "../../types/index.js";
+
+/**
+ * Normalize allowedRoles to CSV format for consistent DB storage.
+ * Handles: JSON array string '["thstd","thpro"]' → 'thstd,thpro'
+ *          Already CSV 'thstd,thpro' → 'thstd,thpro'
+ *          undefined/null → undefined
+ */
+function normalizeAllowedRoles(raw: string | undefined | null): string | undefined {
+  if (!raw) return undefined;
+  if (raw.startsWith("[")) {
+    try {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr.join(",");
+    } catch {
+      // not valid JSON, return as-is
+    }
+  }
+  return raw;
+}
+
+/**
+ * Priority weight map for auto-calculating displayOrder.
+ * Lower weight = higher priority = shown first on frontend.
+ */
+const PRIORITY_WEIGHT: Record<string, number> = {
+  early_bird: 100,
+  regular: 200,
+};
+
+/**
+ * Auto-calculate displayOrder from priority + saleStartDate.
+ * Formula: weight * 10000 + MMDD(saleStartDate)
+ *
+ * Example:
+ *   early_bird + Feb 01 → 100*10000 + 0201 = 1000201
+ *   early_bird + Feb 18 → 100*10000 + 0218 = 1000218
+ *   regular    + May 01 → 200*10000 + 0501 = 2000501
+ *
+ * Guarantees: EB always < Regular regardless of dates.
+ */
+function calculateDisplayOrder(
+  priority: string,
+  saleStartDate: string | Date | null | undefined,
+): number {
+  const weight = PRIORITY_WEIGHT[priority] ?? PRIORITY_WEIGHT.regular;
+
+  if (!saleStartDate) return weight * 10000;
+
+  const saleStart = saleStartDate instanceof Date ? saleStartDate : new Date(saleStartDate);
+  if (isNaN(saleStart.getTime())) return weight * 10000;
+
+  const mmdd = (saleStart.getMonth() + 1) * 100 + saleStart.getDate();
+  return weight * 10000 + mmdd;
+}
 
 export default async function (fastify: FastifyInstance) {
   // ============================================================================
@@ -465,6 +520,7 @@ export default async function (fastify: FastifyInstance) {
             startTime: new Date(data.startTime),
             endTime: new Date(data.endTime),
             maxCapacity: data.maxCapacity,
+            agenda: data.agenda ?? null,
           })
           .returning();
 
@@ -505,7 +561,8 @@ export default async function (fastify: FastifyInstance) {
     }
 
     const data = result.data;
-    const updates: Record<string, unknown> = { ...data, updatedAt: new Date() };
+    const { speakerIds, ...dbFields } = data;
+    const updates: Record<string, unknown> = { ...dbFields, updatedAt: new Date() };
 
     if (data.startTime) updates.startTime = new Date(data.startTime);
     if (data.endTime) updates.endTime = new Date(data.endTime);
@@ -589,20 +646,7 @@ export default async function (fastify: FastifyInstance) {
       };
 
       try {
-        // Get all ticket types for this session
-        const sessionTicketTypes = await db
-          .select({ id: ticketTypes.id })
-          .from(ticketTypes)
-          .where(eq(ticketTypes.sessionId, parseInt(sessionId)));
-
-        if (sessionTicketTypes.length === 0) {
-          // No ticket types for this session, return empty list
-          return reply.send({ enrollments: [], count: 0 });
-        }
-
-        const ticketTypeIds = sessionTicketTypes.map((t) => t.id);
-
-        // Get all registrations for these ticket types
+        // Query via registration_sessions junction table
         const enrollmentList = await db
           .select({
             id: registrations.id,
@@ -612,12 +656,18 @@ export default async function (fastify: FastifyInstance) {
             lastName: registrations.lastName,
             status: registrations.status,
             createdAt: registrations.createdAt,
-            ticketTypeId: registrations.ticketTypeId,
+            ticketTypeId: registrationSessions.ticketTypeId,
             ticketName: ticketTypes.name,
           })
-          .from(registrations)
-          .leftJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
-          .where(inArray(registrations.ticketTypeId, ticketTypeIds))
+          .from(registrationSessions)
+          .innerJoin(registrations, eq(registrationSessions.registrationId, registrations.id))
+          .leftJoin(ticketTypes, eq(registrationSessions.ticketTypeId, ticketTypes.id))
+          .where(
+            and(
+              eq(registrationSessions.sessionId, parseInt(sessionId)),
+              eq(registrations.status, "confirmed")
+            )
+          )
           .orderBy(desc(registrations.createdAt));
 
         return reply.send({
@@ -710,17 +760,27 @@ export default async function (fastify: FastifyInstance) {
           .values({
             eventId: parseInt(eventId),
             category: data.category,
+            priority: data.priority || "regular",
             groupName: data.groupName,
             name: data.name,
             sessionId: data.sessionId, // Keep for backward compat
             price: String(data.price),
             currency: data.currency,
-            allowedRoles: data.allowedRoles,
+            allowedRoles: normalizeAllowedRoles(data.allowedRoles),
             quota: data.quota,
+            displayOrder: calculateDisplayOrder(data.priority || "regular", data.saleStartDate),
             saleStartDate: data.saleStartDate
               ? new Date(data.saleStartDate)
               : null,
             saleEndDate: data.saleEndDate ? new Date(data.saleEndDate) : null,
+            description: data.description,
+            originalPrice:
+              data.originalPrice != null
+                ? String(data.originalPrice)
+                : null,
+            features: data.features,
+            badgeText: data.badgeText,
+            isActive: data.isActive ?? true,
           })
           .returning();
 
@@ -766,9 +826,36 @@ export default async function (fastify: FastifyInstance) {
     const data = result.data;
     const updates: Record<string, unknown> = { ...data };
 
+    // Remove fields that aren't direct DB columns
+    delete updates.sessionIds;
+    delete updates.sessionId;
+
+    if (data.allowedRoles !== undefined) updates.allowedRoles = normalizeAllowedRoles(data.allowedRoles);
+    if (data.price !== undefined) updates.price = String(data.price);
+    if (data.originalPrice !== undefined)
+      updates.originalPrice =
+        data.originalPrice != null ? String(data.originalPrice) : null;
     if (data.saleStartDate)
       updates.saleStartDate = new Date(data.saleStartDate);
     if (data.saleEndDate) updates.saleEndDate = new Date(data.saleEndDate);
+
+    // Auto-recalculate displayOrder when priority or saleStartDate changes
+    if (data.priority !== undefined || data.saleStartDate !== undefined) {
+      const [existing] = await db
+        .select({
+          priority: ticketTypes.priority,
+          saleStartDate: ticketTypes.saleStartDate,
+        })
+        .from(ticketTypes)
+        .where(eq(ticketTypes.id, parseInt(ticketId)))
+        .limit(1);
+
+      if (existing) {
+        const newPriority = data.priority || existing.priority || "regular";
+        const newSaleStart = data.saleStartDate || existing.saleStartDate;
+        updates.displayOrder = calculateDisplayOrder(newPriority, newSaleStart);
+      }
+    }
 
     try {
       const updatedTicket = await db.transaction(async (tx) => {

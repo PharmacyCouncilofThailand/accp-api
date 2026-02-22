@@ -118,7 +118,7 @@ export async function uploadRoutes(fastify: FastifyInstance) {
    * POST /upload/abstract
    * Upload abstract document to Google Drive (abstracts folder)
    */
-  fastify.post("/abstract", async (request, reply) => {
+  fastify.post("/abstract", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     try {
       const result = await handleFileUpload(request, "abstracts");
       return reply.status(result.status).send(result);
@@ -135,7 +135,7 @@ export async function uploadRoutes(fastify: FastifyInstance) {
    * POST /upload/venue-image
    * Upload venue image to Google Drive (venue_images folder)
    */
-  fastify.post("/venue-image", async (request, reply) => {
+  fastify.post("/venue-image", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     try {
       const result = await handleFileUpload(request, "venue_images");
       return reply.status(result.status).send(result);
@@ -152,7 +152,7 @@ export async function uploadRoutes(fastify: FastifyInstance) {
    * POST /upload
    * Generic upload (defaults to speakers for now)
    */
-  fastify.post("/", async (request, reply) => {
+  fastify.post("/", { preHandler: [fastify.authenticate] }, async (request, reply) => {
     try {
       // Defaulting to "speakers" as generic upload type for this route
       const result = await handleFileUpload(request, "speakers");

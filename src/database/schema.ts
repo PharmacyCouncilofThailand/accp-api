@@ -41,6 +41,10 @@ export const ticketCategoryEnum = pgEnum("ticket_category", [
   "primary",
   "addon",
 ]);
+export const ticketPriorityEnum = pgEnum("ticket_priority", [
+  "early_bird",
+  "regular",
+]);
 export const orderStatusEnum = pgEnum("order_status", [
   "pending",
   "paid",
@@ -190,6 +194,7 @@ export const sessions = pgTable("sessions", {
   startTime: timestamp("start_time").notNull(),
   endTime: timestamp("end_time").notNull(),
   maxCapacity: integer("max_capacity").default(100),
+  agenda: jsonb("agenda").$type<{ time: string; topic: string }[]>(),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -242,6 +247,7 @@ export const ticketTypes = pgTable("ticket_types", {
     .notNull()
     .references(() => events.id),
   category: ticketCategoryEnum("category").notNull(),
+  priority: ticketPriorityEnum("priority").notNull().default("regular"),
   groupName: varchar("group_name", { length: 100 }),
   name: varchar("name", { length: 100 }).notNull(),
   sessionId: integer("session_id").references(() => sessions.id), // Deprecated: use ticketSessions for multi-session
@@ -252,6 +258,13 @@ export const ticketTypes = pgTable("ticket_types", {
   soldCount: integer("sold_count").notNull().default(0),
   saleStartDate: timestamp("sale_start_date"),
   saleEndDate: timestamp("sale_end_date"),
+  // Phase 1A: Additional columns for ticket display
+  description: text("description"),
+  originalPrice: decimal("original_price", { precision: 10, scale: 2 }),
+  features: jsonb("features").$type<string[]>().default([]),
+  badgeText: varchar("badge_text", { length: 50 }),
+  displayOrder: integer("display_order").default(0),
+  isActive: boolean("is_active").default(true),
 });
 
 // Junction table for many-to-many: Ticket <-> Sessions
@@ -271,17 +284,60 @@ export const promoCodes = pgTable("promo_codes", {
   ticketTypeId: integer("ticket_type_id").references(() => ticketTypes.id),
   code: varchar("code", { length: 50 }).notNull().unique(),
   description: text("description"),
-  discountType: varchar("discount_type", { length: 20 }).notNull(),
+  discountType: varchar("discount_type", { length: 20 }).notNull(), // 'percentage' | 'fixed'
   discountValue: decimal("discount_value", {
     precision: 10,
     scale: 2,
-  }).notNull(),
+  }).notNull(), // used for percentage
+  fixedValueThb: decimal("fixed_value_thb", { precision: 10, scale: 2 }),
+  fixedValueUsd: decimal("fixed_value_usd", { precision: 10, scale: 2 }),
+  minPurchase: decimal("min_purchase", { precision: 10, scale: 2 }).default("0"),
+  maxDiscount: decimal("max_discount", { precision: 10, scale: 2 }),
   maxUses: integer("max_uses").notNull(),
+  maxUsesPerUser: integer("max_uses_per_user").notNull().default(1),
   usedCount: integer("used_count").notNull().default(0),
   validFrom: timestamp("valid_from"),
   validUntil: timestamp("valid_until"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Rule sets: which ticket combinations a promo code applies to
+export const promoCodeRuleSets = pgTable("promo_code_rule_sets", {
+  id: serial("id").primaryKey(),
+  promoCodeId: integer("promo_code_id")
+    .notNull()
+    .references(() => promoCodes.id, { onDelete: "cascade" }),
+  matchType: varchar("match_type", { length: 10 }).notNull().default("all"), // 'all' | 'any' | 'only'
+});
+
+export const promoCodeRuleItems = pgTable("promo_code_rule_items", {
+  id: serial("id").primaryKey(),
+  ruleSetId: integer("rule_set_id")
+    .notNull()
+    .references(() => promoCodeRuleSets.id, { onDelete: "cascade" }),
+  ticketTypeId: integer("ticket_type_id")
+    .notNull()
+    .references(() => ticketTypes.id, { onDelete: "cascade" }),
+});
+
+// Promo code usage tracking (pending reservation pattern)
+export const promoCodeUsages = pgTable("promo_code_usages", {
+  id: serial("id").primaryKey(),
+  promoCodeId: integer("promo_code_id")
+    .notNull()
+    .references(() => promoCodes.id),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id),
+  orderId: integer("order_id")
+    .references(() => orders.id),
+  status: varchar("status", { length: 20 }).notNull().default("pending"), // 'pending' | 'used' | 'cancelled' | 'expired'
+  discountAmount: decimal("discount_amount", { precision: 10, scale: 2 }),
+  reservedAt: timestamp("reserved_at").notNull().defaultNow(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  cancelledAt: timestamp("cancelled_at"),
 });
 
 // --------------------------------------------------------------------------
@@ -293,9 +349,25 @@ export const orders = pgTable("orders", {
     .notNull()
     .references(() => users.id),
   orderNumber: varchar("order_number", { length: 50 }).notNull().unique(),
+  subtotalAmount: decimal("subtotal_amount", { precision: 10, scale: 2 }),
+  discountAmount: decimal("discount_amount", { precision: 10, scale: 2 }).default("0"),
+  promoCodeId: integer("promo_code_id").references(() => promoCodes.id),
+  promoCode: varchar("promo_code", { length: 50 }),
+  promoDiscountType: varchar("promo_discount_type", { length: 20 }),
+  promoDiscountValue: decimal("promo_discount_value", { precision: 10, scale: 2 }),
   totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).notNull(),
   currency: varchar("currency", { length: 3 }).notNull().default("THB"),
   status: orderStatusEnum("status").notNull().default("pending"),
+  needTaxInvoice: boolean("need_tax_invoice").notNull().default(false),
+  taxName: varchar("tax_name", { length: 200 }),
+  taxId: varchar("tax_id", { length: 50 }),
+  taxAddress: varchar("tax_address", { length: 500 }),
+  taxSubDistrict: varchar("tax_sub_district", { length: 100 }),
+  taxDistrict: varchar("tax_district", { length: 100 }),
+  taxProvince: varchar("tax_province", { length: 100 }),
+  taxPostalCode: varchar("tax_postal_code", { length: 20 }),
+  taxFullAddress: text("tax_full_address"),
+  taxCreatedAt: timestamp("tax_created_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -305,18 +377,38 @@ export const orders = pgTable("orders", {
 export const registrations = pgTable("registrations", {
   id: serial("id").primaryKey(),
   regCode: varchar("reg_code", { length: 50 }).notNull().unique(),
+  orderId: integer("order_id").references(() => orders.id),
   eventId: integer("event_id")
     .notNull()
     .references(() => events.id),
   ticketTypeId: integer("ticket_type_id")
     .notNull()
     .references(() => ticketTypes.id),
+  sessionId: integer("session_id").references(() => sessions.id), // DEPRECATED: use registration_sessions
   userId: integer("user_id").references(() => users.id),
   email: varchar("email", { length: 255 }).notNull(),
   firstName: varchar("first_name", { length: 100 }).notNull(),
   lastName: varchar("last_name", { length: 100 }).notNull(),
   dietaryRequirements: varchar("dietary_requirements", { length: 255 }),
   status: registrationStatusEnum("status").notNull().default("confirmed"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Junction table: 1 registration → N sessions (tracks which sessions a registrant has access to)
+export const registrationSessions = pgTable("registration_sessions", {
+  id: serial("id").primaryKey(),
+  registrationId: integer("registration_id")
+    .notNull()
+    .references(() => registrations.id, { onDelete: "cascade" }),
+  sessionId: integer("session_id")
+    .notNull()
+    .references(() => sessions.id),
+  ticketTypeId: integer("ticket_type_id")
+    .notNull()
+    .references(() => ticketTypes.id),
+  checkedInAt: timestamp("checked_in_at"),
+  checkedInBy: integer("checked_in_by")
+    .references(() => backofficeUsers.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -343,6 +435,12 @@ export const payments = pgTable("payments", {
   status: varchar("status", { length: 20 }).notNull(),
   paymentChannel: varchar("payment_channel", { length: 50 }),
   paymentDetails: jsonb("payment_details"),
+  paymentProvider: varchar("payment_provider", { length: 30 }).notNull().default("stripe"),
+  providerRef: varchar("provider_ref", { length: 255 }),
+  providerStatus: varchar("provider_status", { length: 50 }),
+  paySolutionsRefno: varchar("pay_solutions_refno", { length: 12 }),
+  paySolutionsOrderNo: varchar("pay_solutions_order_no", { length: 50 }),
+  paySolutionsChannel: varchar("pay_solutions_channel", { length: 20 }),
   stripeReceiptUrl: varchar("stripe_receipt_url", { length: 500 }),
   stripeSessionId: varchar("stripe_session_id", { length: 255 }),
   paidAt: timestamp("paid_at"),
@@ -501,11 +599,23 @@ export type NewStaffEventAssignment = typeof staffEventAssignments.$inferInsert;
 export type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
 export type NewPasswordResetToken = typeof passwordResetTokens.$inferInsert;
 
+export type RegistrationSession = typeof registrationSessions.$inferSelect;
+export type NewRegistrationSession = typeof registrationSessions.$inferInsert;
+
+export type PromoCode = typeof promoCodes.$inferSelect;
+export type NewPromoCode = typeof promoCodes.$inferInsert;
+
+export type PromoCodeRuleSet = typeof promoCodeRuleSets.$inferSelect;
+export type PromoCodeRuleItem = typeof promoCodeRuleItems.$inferSelect;
+
+export type PromoCodeUsage = typeof promoCodeUsages.$inferSelect;
+export type NewPromoCodeUsage = typeof promoCodeUsages.$inferInsert;
+
 // --------------------------------------------------------------------------
 // 8. RELATIONS
 // --------------------------------------------------------------------------
 
-export const registrationsRelations = relations(registrations, ({ one }) => ({
+export const registrationsRelations = relations(registrations, ({ one, many }) => ({
   event: one(events, {
     fields: [registrations.eventId],
     references: [events.id],
@@ -514,9 +624,33 @@ export const registrationsRelations = relations(registrations, ({ one }) => ({
     fields: [registrations.ticketTypeId],
     references: [ticketTypes.id],
   }),
+  session: one(sessions, {
+    fields: [registrations.sessionId],
+    references: [sessions.id],
+  }),
+  order: one(orders, {
+    fields: [registrations.orderId],
+    references: [orders.id],
+  }),
   user: one(users, {
     fields: [registrations.userId],
     references: [users.id],
+  }),
+  registrationSessions: many(registrationSessions),
+}));
+
+export const registrationSessionsRelations = relations(registrationSessions, ({ one }) => ({
+  registration: one(registrations, {
+    fields: [registrationSessions.registrationId],
+    references: [registrations.id],
+  }),
+  session: one(sessions, {
+    fields: [registrationSessions.sessionId],
+    references: [sessions.id],
+  }),
+  ticketType: one(ticketTypes, {
+    fields: [registrationSessions.ticketTypeId],
+    references: [ticketTypes.id],
   }),
 }));
 
@@ -544,6 +678,7 @@ export const sessionsRelations = relations(sessions, ({ one, many }) => ({
     references: [events.id],
   }),
   eventSpeakers: many(eventSpeakers),
+  registrationSessions: many(registrationSessions),
 }));
 
 export const speakersRelations = relations(speakers, ({ many }) => ({

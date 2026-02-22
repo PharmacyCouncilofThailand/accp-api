@@ -31,6 +31,20 @@ JWT_SECRET=your-secret-key
 CORS_ORIGIN=http://localhost:3000,http://localhost:3001
 ```
 
+### Production values when frontend is on Netlify
+
+If `accp-web` and `accp-backoffice` are deployed on Netlify, ensure these are set in API hosting:
+
+```
+CORS_ORIGIN=https://<web-domain>,https://<backoffice-domain>
+BASE_URL=https://<web-domain>
+API_BASE_URL=https://<api-domain>
+```
+
+- `CORS_ORIGIN` must include both frontend domains (comma-separated)
+- `BASE_URL` is used for links in emails
+- `API_BASE_URL` is used for receipt/download links and should be `https` in production
+
 ## Project Structure
 
 ```

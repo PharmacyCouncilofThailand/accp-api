@@ -35,23 +35,58 @@ export const createSessionSchema = z.object({
     endTime: z.string().datetime(),
     speakerIds: z.array(z.number()).optional(), // New way: link to speakers table
     maxCapacity: z.number().int().positive().default(100),
+    agenda: z.array(z.object({
+        time: z.string().min(1),
+        topic: z.string().min(1),
+    })).optional().nullable(),
 });
 
 export const updateSessionSchema = createSessionSchema.partial();
 
+// Canonical role values matching the DB user_role enum
+export const VALID_TICKET_ROLES = ["thstd", "thpro", "interstd", "interpro"] as const;
+
+// Valid ticket priorities
+export const VALID_TICKET_PRIORITIES = [
+  "early_bird",
+  "regular",
+] as const;
+
 // Create Ticket Type Schema
 export const createTicketTypeSchema = z.object({
     category: z.enum(["primary", "addon"]),
+    priority: z.enum(VALID_TICKET_PRIORITIES).default("regular"),
     groupName: z.string().max(100).optional(),
     name: z.string().min(1).max(100),
     sessionId: z.number().int().optional(), // Deprecated: use sessionIds
     sessionIds: z.array(z.number().int()).optional(), // Multi-session linking
     price: z.preprocess((val) => typeof val === 'string' && val.trim() === '' ? 0 : Number(val), z.number().min(0)),
     currency: z.string().max(3).default("THB"),
-    allowedRoles: z.string().optional(),
+    allowedRoles: z.string().optional().refine(
+        (val) => {
+            if (!val) return true; // optional — no value is OK
+            try {
+                const roles = JSON.parse(val);
+                if (!Array.isArray(roles)) return false;
+                return roles.every((r: string) => VALID_TICKET_ROLES.includes(r as any));
+            } catch {
+                return false;
+            }
+        },
+        { message: `allowedRoles must be a JSON array of valid roles: ${VALID_TICKET_ROLES.join(", ")}` }
+    ),
     quota: z.number().int().positive(),
     saleStartDate: z.string().datetime().optional(),
     saleEndDate: z.string().datetime().optional(),
+    displayOrder: z.number().int().min(0).optional(),
+    description: z.string().optional(),
+    originalPrice: z.preprocess(
+        (val) => val === "" || val === null || val === undefined ? undefined : Number(val),
+        z.number().min(0).optional()
+    ),
+    features: z.array(z.string()).optional().default([]),
+    badgeText: z.string().max(50).optional(),
+    isActive: z.boolean().optional(),
 });
 
 export const updateTicketTypeSchema = createTicketTypeSchema.partial();

@@ -25,8 +25,7 @@ const corsOrigins = process.env.CORS_ORIGIN
 
 fastify.register(cors, {
   origin: corsOrigins,
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-user-email'],
-  exposedHeaders: ['x-user-email'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 });
 
@@ -145,6 +144,7 @@ import userAbstractsRoutes from "./routes/public/abstracts/user.js";
 import publicWorkshopsRoutes from "./routes/public/workshops.js";
 import publicTicketsRoutes from "./routes/public/tickets.js";
 import publicContactRoutes from "./routes/public/contact.js";
+import paymentRoutes from "./routes/payments/index.js";
 
 // ============================================================================
 // Public Routes (No Auth Required)
@@ -188,6 +188,7 @@ fastify.register(userAbstractsRoutes, { prefix: "/api/abstracts/user" });
 fastify.register(publicWorkshopsRoutes, { prefix: "/api/workshops" });
 fastify.register(publicTicketsRoutes, { prefix: "/api/tickets" });
 fastify.register(publicContactRoutes, { prefix: "/api/contact" });
+fastify.register(paymentRoutes, { prefix: "/api/payments" });
 
 // ============================================================================
 // Protected Backoffice Routes (Auth Required)

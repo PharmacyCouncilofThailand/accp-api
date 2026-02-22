@@ -9,4 +9,6 @@ export const checkinListSchema = z.object({
 
 export const createCheckinSchema = z.object({
     regCode: z.string().min(1),
+    sessionId: z.number().optional(),
+    checkInAll: z.boolean().optional(),
 });

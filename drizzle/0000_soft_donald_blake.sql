@@ -1,4 +1,4 @@
-CREATE TYPE "public"."abstract_category" AS ENUM('clinical', 'social', 'experimental', 'education', 'other');--> statement-breakpoint
+CREATE TYPE "public"."abstract_category" AS ENUM('clinical_pharmacy', 'social_administrative', 'community_pharmacy', 'pharmacology_toxicology', 'pharmacy_education', 'digital_pharmacy');--> statement-breakpoint
 CREATE TYPE "public"."abstract_status" AS ENUM('pending', 'accepted', 'rejected');--> statement-breakpoint
 CREATE TYPE "public"."account_status" AS ENUM('pending_approval', 'active', 'rejected');--> statement-breakpoint
 CREATE TYPE "public"."event_status" AS ENUM('draft', 'published', 'cancelled', 'completed');--> statement-breakpoint
@@ -7,7 +7,9 @@ CREATE TYPE "public"."order_item_type" AS ENUM('ticket', 'addon');--> statement-
 CREATE TYPE "public"."order_status" AS ENUM('pending', 'paid', 'cancelled');--> statement-breakpoint
 CREATE TYPE "public"."presentation_type" AS ENUM('oral', 'poster');--> statement-breakpoint
 CREATE TYPE "public"."registration_status" AS ENUM('confirmed', 'cancelled');--> statement-breakpoint
+CREATE TYPE "public"."session_type" AS ENUM('workshop', 'gala_dinner', 'lecture', 'ceremony', 'break', 'other');--> statement-breakpoint
 CREATE TYPE "public"."speaker_type" AS ENUM('keynote', 'panelist', 'moderator', 'guest');--> statement-breakpoint
+CREATE TYPE "public"."staff_role" AS ENUM('admin', 'organizer', 'reviewer', 'staff', 'verifier');--> statement-breakpoint
 CREATE TYPE "public"."ticket_category" AS ENUM('primary', 'addon');--> statement-breakpoint
 CREATE TYPE "public"."user_role" AS ENUM('admin', 'thstd', 'interstd', 'thpro', 'interpro');--> statement-breakpoint
 CREATE TABLE "abstract_co_authors" (
@@ -32,19 +34,38 @@ CREATE TABLE "abstract_reviews" (
 --> statement-breakpoint
 CREATE TABLE "abstracts" (
 	"id" serial PRIMARY KEY NOT NULL,
-	"user_id" integer NOT NULL,
+	"tracking_id" varchar(20),
+	"user_id" integer,
 	"event_id" integer NOT NULL,
 	"title" varchar(500) NOT NULL,
 	"category" "abstract_category" NOT NULL,
 	"presentation_type" "presentation_type" NOT NULL,
 	"keywords" varchar(255),
 	"background" text NOT NULL,
+	"objective" text NOT NULL,
 	"methods" text NOT NULL,
 	"results" text NOT NULL,
 	"conclusion" text NOT NULL,
 	"full_paper_url" varchar(500),
 	"status" "abstract_status" DEFAULT 'pending' NOT NULL,
-	"created_at" timestamp DEFAULT now() NOT NULL
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "abstracts_tracking_id_unique" UNIQUE("tracking_id")
+);
+--> statement-breakpoint
+CREATE TABLE "backoffice_users" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"email" varchar(255) NOT NULL,
+	"password_hash" varchar(255) NOT NULL,
+	"role" "staff_role" NOT NULL,
+	"first_name" varchar(100) NOT NULL,
+	"last_name" varchar(100) NOT NULL,
+	"conference_code" varchar(100),
+	"assigned_categories" jsonb DEFAULT '[]'::jsonb,
+	"assigned_presentation_types" jsonb DEFAULT '[]'::jsonb,
+	"is_active" boolean DEFAULT true NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "backoffice_users_email_unique" UNIQUE("email")
 );
 --> statement-breakpoint
 CREATE TABLE "check_ins" (
@@ -133,6 +154,16 @@ CREATE TABLE "orders" (
 	CONSTRAINT "orders_order_number_unique" UNIQUE("order_number")
 );
 --> statement-breakpoint
+CREATE TABLE "password_reset_tokens" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"user_id" integer NOT NULL,
+	"token" varchar(255) NOT NULL,
+	"expires_at" timestamp NOT NULL,
+	"used_at" timestamp,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "password_reset_tokens_token_unique" UNIQUE("token")
+);
+--> statement-breakpoint
 CREATE TABLE "payments" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"order_id" integer NOT NULL,
@@ -191,11 +222,12 @@ CREATE TABLE "sessions" (
 	"event_id" integer NOT NULL,
 	"session_code" varchar(50) NOT NULL,
 	"session_name" varchar(255) NOT NULL,
+	"session_type" "session_type" DEFAULT 'other',
+	"is_main_session" boolean DEFAULT false NOT NULL,
 	"description" text,
 	"room" varchar(100),
 	"start_time" timestamp NOT NULL,
 	"end_time" timestamp NOT NULL,
-	"speakers" text,
 	"max_capacity" integer DEFAULT 100,
 	"is_active" boolean DEFAULT true NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
@@ -206,12 +238,25 @@ CREATE TABLE "speakers" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"first_name" varchar(100) NOT NULL,
 	"last_name" varchar(100) NOT NULL,
-	"email" varchar(255),
 	"bio" text,
 	"photo_url" varchar(500),
 	"organization" varchar(255),
 	"position" varchar(255),
 	"created_at" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "staff_event_assignments" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"staff_id" integer NOT NULL,
+	"event_id" integer NOT NULL,
+	"session_id" integer,
+	"assigned_at" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "ticket_sessions" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"ticket_type_id" integer NOT NULL,
+	"session_id" integer NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "ticket_types" (
@@ -227,7 +272,13 @@ CREATE TABLE "ticket_types" (
 	"quota" integer NOT NULL,
 	"sold_count" integer DEFAULT 0 NOT NULL,
 	"sale_start_date" timestamp,
-	"sale_end_date" timestamp
+	"sale_end_date" timestamp,
+	"description" text,
+	"original_price" numeric(10, 2),
+	"features" jsonb DEFAULT '[]'::jsonb,
+	"badge_text" varchar(50),
+	"display_order" integer DEFAULT 0,
+	"is_active" boolean DEFAULT true
 );
 --> statement-breakpoint
 CREATE TABLE "users" (
@@ -242,13 +293,24 @@ CREATE TABLE "users" (
 	"institution" varchar(255),
 	"thai_id_card" varchar(13),
 	"passport_id" varchar(20),
+	"pharmacy_license_id" varchar(20),
 	"verification_doc_url" varchar(500),
 	"status" "account_status" DEFAULT 'pending_approval' NOT NULL,
 	"rejection_reason" text,
+	"resubmission_count" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "users_email_unique" UNIQUE("email"),
 	CONSTRAINT "users_thai_id_card_unique" UNIQUE("thai_id_card"),
-	CONSTRAINT "users_passport_id_unique" UNIQUE("passport_id")
+	CONSTRAINT "users_passport_id_unique" UNIQUE("passport_id"),
+	CONSTRAINT "users_pharmacy_license_id_unique" UNIQUE("pharmacy_license_id")
+);
+--> statement-breakpoint
+CREATE TABLE "verification_rejection_history" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"user_id" integer NOT NULL,
+	"reason" text NOT NULL,
+	"rejected_by" integer,
+	"rejected_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 ALTER TABLE "abstract_co_authors" ADD CONSTRAINT "abstract_co_authors_abstract_id_abstracts_id_fk" FOREIGN KEY ("abstract_id") REFERENCES "public"."abstracts"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -269,6 +331,7 @@ ALTER TABLE "order_items" ADD CONSTRAINT "order_items_order_id_orders_id_fk" FOR
 ALTER TABLE "order_items" ADD CONSTRAINT "order_items_ticket_type_id_ticket_types_id_fk" FOREIGN KEY ("ticket_type_id") REFERENCES "public"."ticket_types"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "order_items" ADD CONSTRAINT "order_items_registration_id_registrations_id_fk" FOREIGN KEY ("registration_id") REFERENCES "public"."registrations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "orders" ADD CONSTRAINT "orders_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "password_reset_tokens" ADD CONSTRAINT "password_reset_tokens_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "payments" ADD CONSTRAINT "payments_order_id_orders_id_fk" FOREIGN KEY ("order_id") REFERENCES "public"."orders"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "promo_codes" ADD CONSTRAINT "promo_codes_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "promo_codes" ADD CONSTRAINT "promo_codes_ticket_type_id_ticket_types_id_fk" FOREIGN KEY ("ticket_type_id") REFERENCES "public"."ticket_types"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -278,5 +341,12 @@ ALTER TABLE "registrations" ADD CONSTRAINT "registrations_event_id_events_id_fk"
 ALTER TABLE "registrations" ADD CONSTRAINT "registrations_ticket_type_id_ticket_types_id_fk" FOREIGN KEY ("ticket_type_id") REFERENCES "public"."ticket_types"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "registrations" ADD CONSTRAINT "registrations_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "sessions" ADD CONSTRAINT "sessions_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "staff_event_assignments" ADD CONSTRAINT "staff_event_assignments_staff_id_backoffice_users_id_fk" FOREIGN KEY ("staff_id") REFERENCES "public"."backoffice_users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "staff_event_assignments" ADD CONSTRAINT "staff_event_assignments_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "staff_event_assignments" ADD CONSTRAINT "staff_event_assignments_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ticket_sessions" ADD CONSTRAINT "ticket_sessions_ticket_type_id_ticket_types_id_fk" FOREIGN KEY ("ticket_type_id") REFERENCES "public"."ticket_types"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ticket_sessions" ADD CONSTRAINT "ticket_sessions_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."sessions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "ticket_types" ADD CONSTRAINT "ticket_types_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "ticket_types" ADD CONSTRAINT "ticket_types_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."sessions"("id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "ticket_types" ADD CONSTRAINT "ticket_types_session_id_sessions_id_fk" FOREIGN KEY ("session_id") REFERENCES "public"."sessions"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "verification_rejection_history" ADD CONSTRAINT "verification_rejection_history_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "verification_rejection_history" ADD CONSTRAINT "verification_rejection_history_rejected_by_backoffice_users_id_fk" FOREIGN KEY ("rejected_by") REFERENCES "public"."backoffice_users"("id") ON DELETE no action ON UPDATE no action;

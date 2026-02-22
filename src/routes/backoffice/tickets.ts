@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
 import { ticketTypes, events, staffEventAssignments, ticketSessions } from "../../database/schema.js";
-import { eq, desc, ilike, and, count, inArray } from "drizzle-orm";
+import { eq, desc, ilike, and, or, count, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 
 const ticketQuerySchema = z.object({
@@ -62,7 +62,15 @@ export default async function (fastify: FastifyInstance) {
                 );
             }
             if (category) conditions.push(eq(ticketTypes.category, category));
-            if (role) conditions.push(ilike(ticketTypes.allowedRoles, `%${role}%`));
+            if (role) conditions.push(
+                or(
+                    eq(ticketTypes.allowedRoles, role),
+                    sql`${ticketTypes.allowedRoles} LIKE ${role + ',%'}`,
+                    sql`${ticketTypes.allowedRoles} LIKE ${'%,' + role + ',%'}`,
+                    sql`${ticketTypes.allowedRoles} LIKE ${'%,' + role}`,
+                    sql`${ticketTypes.allowedRoles} LIKE ${`%"${role}"%`}`
+                ) as any
+            );
 
             const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -77,14 +85,21 @@ export default async function (fastify: FastifyInstance) {
                 .select({
                     id: ticketTypes.id,
                     eventId: ticketTypes.eventId,
-                    code: ticketTypes.groupName,
+                    groupName: ticketTypes.groupName,
                     name: ticketTypes.name,
                     category: ticketTypes.category,
+                    priority: ticketTypes.priority,
                     price: ticketTypes.price,
                     currency: ticketTypes.currency,
+                    originalPrice: ticketTypes.originalPrice,
+                    description: ticketTypes.description,
+                    features: ticketTypes.features,
+                    badgeText: ticketTypes.badgeText,
                     quota: ticketTypes.quota,
                     sold: ticketTypes.soldCount,
                     allowedRoles: ticketTypes.allowedRoles,
+                    displayOrder: ticketTypes.displayOrder,
+                    isActive: ticketTypes.isActive,
                     startDate: ticketTypes.saleStartDate,
                     endDate: ticketTypes.saleEndDate,
                     eventCode: events.eventCode,
