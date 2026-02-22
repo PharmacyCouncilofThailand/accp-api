@@ -224,9 +224,10 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
                     date: event?.startDate ? new Date(event.startDate).toLocaleDateString('en-US', {
                         month: 'long',
                         day: 'numeric',
-                        year: 'numeric'
+                        year: 'numeric',
+                        timeZone: 'Asia/Bangkok'
                     }) : '',
-                    time: `${start.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })} - ${end.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}`,
+                    time: `${start.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' })} - ${end.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Bangkok' })}`,
                     duration: durationHours >= 6 ? 'fullDay' : 'halfDay',
                     venue: session.room || event?.location || '',
                     capacity: session.maxCapacity || 0,

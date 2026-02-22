@@ -803,6 +803,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               : null,
             workshops: workshopRows.map((row) => ({
               id: `${primaryRegistration.regCode}-WS-${row.sessionId}`,
+              sessionId: row.sessionId,
               status: primaryRegistration.status,
               name: row.sessionName || row.ticketName,
               purchasedAt: row.linkedAt?.toISOString() || null,
@@ -1031,6 +1032,34 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               success: false,
               error: `You already purchased the "${addOnId}" add-on.`,
               code: "DUPLICATE_ADDON",
+            });
+          }
+        }
+
+        // Block purchasing workshop addon if user already has a confirmed workshop session
+        if (addOnIds.some((id) => id.toLowerCase() === "workshop")) {
+          const existingWorkshopSession = await db
+            .select({ id: registrationSessions.id })
+            .from(registrationSessions)
+            .innerJoin(registrations, eq(registrationSessions.registrationId, registrations.id))
+            .innerJoin(ticketTypes, eq(registrationSessions.ticketTypeId, ticketTypes.id))
+            .innerJoin(orders, eq(registrations.orderId, orders.id))
+            .innerJoin(payments, eq(payments.orderId, orders.id))
+            .where(
+              and(
+                eq(registrations.userId, userId),
+                eq(registrations.status, "confirmed"),
+                sql`LOWER(${ticketTypes.groupName}) = 'workshop'`,
+                eq(payments.status, "paid")
+              )
+            )
+            .limit(1);
+
+          if (existingWorkshopSession.length > 0) {
+            return reply.status(400).send({
+              success: false,
+              error: "You have already registered for a workshop session. Only one workshop session is allowed per registration.",
+              code: "DUPLICATE_WORKSHOP_SESSION",
             });
           }
         }

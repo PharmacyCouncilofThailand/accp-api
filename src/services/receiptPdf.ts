@@ -67,8 +67,8 @@ function escHtml(s: string): string {
 }
 
 function fmtDateTime(d: Date): string {
-  const datePart = d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
-  const timePart = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+  const datePart = d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Bangkok" });
+  const timePart = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Bangkok" });
   return `${datePart} at ${timePart}`;
 }
 

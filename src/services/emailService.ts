@@ -678,6 +678,7 @@ export async function sendPaymentReceiptEmail(
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Asia/Bangkok",
   });
 
   const itemLines = items
