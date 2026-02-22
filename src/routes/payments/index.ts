@@ -55,20 +55,40 @@ function generateRegCode(): string {
   return `REG-${ts}${rand}`;
 }
 
-async function generatePaySolutionsRefno(): Promise<string> {
-  // Ensure sequence exists (safe for new environments / DB resets)
-  await db.execute(sql`
-    CREATE SEQUENCE IF NOT EXISTS pay_solutions_refno_seq
-    START WITH 100001 INCREMENT BY 1 MINVALUE 100001 NO MAXVALUE CACHE 1
-  `);
+const PAY_SOLUTIONS_REFNO_PROD_MIN = 200000000000;
+const PAY_SOLUTIONS_REFNO_PROD_MAX = 299999999999;
 
-  // Bump sequence to at least 100001 if it was created with a lower start
-  // (prevents collision with any refno <= 100000 used in Pay Solutions panel)
-  await db.execute(sql`
-    SELECT setval('pay_solutions_refno_seq',
-      GREATEST(last_value, 100001), true)
-    FROM pay_solutions_refno_seq
-  `);
+async function generatePaySolutionsRefno(): Promise<string> {
+  const isProduction = process.env.NODE_ENV === "production";
+
+  if (isProduction) {
+    // Production range: 200000000000 - 299999999999
+    await db.execute(sql`
+      CREATE SEQUENCE IF NOT EXISTS pay_solutions_refno_seq
+      START WITH 200000000000 INCREMENT BY 1 MINVALUE 200000000000 NO MAXVALUE CACHE 1
+    `);
+
+    // Ensure next generated value starts at least from 200000000000
+    await db.execute(sql`
+      SELECT setval('pay_solutions_refno_seq',
+        GREATEST(last_value, 199999999999), true)
+      FROM pay_solutions_refno_seq
+    `);
+  } else {
+    // Ensure sequence exists (safe for new environments / DB resets)
+    await db.execute(sql`
+      CREATE SEQUENCE IF NOT EXISTS pay_solutions_refno_seq
+      START WITH 100001 INCREMENT BY 1 MINVALUE 100001 NO MAXVALUE CACHE 1
+    `);
+
+    // Bump sequence to at least 100001 if it was created with a lower start
+    // (prevents collision with any refno <= 100000 used in Pay Solutions panel)
+    await db.execute(sql`
+      SELECT setval('pay_solutions_refno_seq',
+        GREATEST(last_value, 100001), true)
+      FROM pay_solutions_refno_seq
+    `);
+  }
 
   const rows = await db.execute(sql`
     SELECT lpad(nextval('pay_solutions_refno_seq')::text, 12, '0') AS refno
@@ -77,6 +97,13 @@ async function generatePaySolutionsRefno(): Promise<string> {
   const refno = String((rows as unknown as Array<{ refno: string }>)[0]?.refno || "");
   if (!/^\d{12}$/.test(refno)) {
     throw new Error("Failed to generate Pay Solutions refno");
+  }
+
+  if (isProduction) {
+    const numericRefno = Number(refno);
+    if (numericRefno < PAY_SOLUTIONS_REFNO_PROD_MIN || numericRefno > PAY_SOLUTIONS_REFNO_PROD_MAX) {
+      throw new Error("Generated Pay Solutions refno is outside production range");
+    }
   }
 
   return refno;
