@@ -747,7 +747,7 @@ Bangkok Thailand
   if (qrUrl && regCode) {
     const qrHtml = `<br><div style="text-align:center;margin:20px 0;"><img src="${qrUrl}" alt="QR Code: ${regCode}" width="200" height="200" style="display:block;margin:0 auto;" /></div>`;
     htmlContent = htmlContent.replace(
-      `Registration Code: <strong>${regCode}</strong>`,
+      `Registration Code: ${regCode}`,
       `Registration Code: <strong>${regCode}</strong>${qrHtml}`
     );
   }
