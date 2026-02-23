@@ -55,23 +55,23 @@ function generateRegCode(): string {
   return `REG-${ts}${rand}`;
 }
 
-const PAY_SOLUTIONS_REFNO_PROD_MIN = 200000000000;
-const PAY_SOLUTIONS_REFNO_PROD_MAX = 299999999999;
+const PAY_SOLUTIONS_REFNO_PROD_MIN = 300000000001;
+const PAY_SOLUTIONS_REFNO_PROD_MAX = 399999999999;
 
 async function generatePaySolutionsRefno(): Promise<string> {
   const isProduction = process.env.NODE_ENV === "production";
 
   if (isProduction) {
-    // Production range: 200000000000 - 299999999999
+    // Production range: 300000000001 - 399999999999
     await db.execute(sql`
       CREATE SEQUENCE IF NOT EXISTS pay_solutions_refno_seq
-      START WITH 200000000000 INCREMENT BY 1 MINVALUE 200000000000 NO MAXVALUE CACHE 1
+      START WITH 300000000001 INCREMENT BY 1 MINVALUE 300000000001 NO MAXVALUE CACHE 1
     `);
 
-    // Ensure next generated value starts at least from 200000000000
+    // Ensure next generated value starts at least from 300000000001
     await db.execute(sql`
       SELECT setval('pay_solutions_refno_seq',
-        GREATEST(last_value, 199999999999), true)
+        GREATEST(last_value, 300000000000), true)
       FROM pay_solutions_refno_seq
     `);
   } else {
