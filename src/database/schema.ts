@@ -391,6 +391,9 @@ export const registrations = pgTable("registrations", {
   lastName: varchar("last_name", { length: 100 }).notNull(),
   dietaryRequirements: varchar("dietary_requirements", { length: 255 }),
   status: registrationStatusEnum("status").notNull().default("confirmed"),
+  source: varchar("source", { length: 20 }).notNull().default("purchase"),
+  addedBy: integer("added_by").references(() => backofficeUsers.id),
+  addedNote: text("added_note"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -409,6 +412,9 @@ export const registrationSessions = pgTable("registration_sessions", {
   checkedInAt: timestamp("checked_in_at"),
   checkedInBy: integer("checked_in_by")
     .references(() => backofficeUsers.id),
+  source: varchar("source", { length: 20 }).notNull().default("purchase"),
+  addedBy: integer("added_by").references(() => backofficeUsers.id),
+  addedNote: text("added_note"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

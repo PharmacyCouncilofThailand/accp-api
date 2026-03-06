@@ -197,6 +197,82 @@ function getContactEmail(): string {
 }
 
 // ============================================
+// MANUAL REGISTRATION EMAIL
+// ============================================
+
+/**
+ * Send manual registration confirmation email with QR code
+ * Pattern: plain text converted to <br> + injected QR code <img> (same as sendPaymentReceiptEmail)
+ */
+export async function sendManualRegistrationEmail(
+  email: string,
+  firstName: string,
+  lastName: string,
+  regCode: string,
+  eventName: string,
+  ticketName: string,
+  sessions: { sessionName: string; startTime: Date; endTime: Date }[]
+): Promise<void> {
+  const contactEmail = getContactEmail();
+  const websiteUrl = getWebsiteUrl();
+
+  const sessionLines = sessions.length > 0
+    ? sessions
+        .map((s) => {
+          const date = s.startTime.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "Asia/Bangkok" });
+          const timeFrom = s.startTime.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
+          const timeTo = s.endTime.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
+          return `  - ${s.sessionName} (${date}, ${timeFrom} - ${timeTo})`;
+        })
+        .join("\n")
+    : "  - (No sessions)";
+
+  const plainText = `
+Dear ${firstName} ${lastName},
+
+Your registration for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY has been confirmed by the conference staff. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
+
+Registration Code: ${regCode}
+Event: ${eventName}
+Ticket: ${ticketName}
+
+Registered Sessions:
+${sessionLines}
+
+Please present this registration code (or scan the QR code below) at the registration desk on the day of the event.
+
+For more information and details about the conference, go to ${websiteUrl}
+
+If you have any questions, please contact ${contactEmail}
+
+See you soon at ACCP 2026, Bangkok, Thailand.
+
+Sincerely,
+25th ACCP committee
+Bangkok Thailand
+  `.trim();
+
+  // Convert \n → <br> then inject QR code image after reg-code line
+  let htmlContent = plainText.replace(/\n/g, "<br>\n");
+
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(regCode)}`;
+  const qrHtml = `<br><div style="text-align:center;margin:20px 0;"><img src="${qrUrl}" alt="QR Code: ${regCode}" width="200" height="200" style="display:block;margin:0 auto;" /><p style="font-size:13px;color:#6b7280;margin-top:8px;">Scan this QR code at the registration desk for fast check-in</p></div>`;
+
+  htmlContent = htmlContent.replace(
+    `Registration Code: ${regCode}`,
+    `Registration Code: <strong>${regCode}</strong>${qrHtml}`
+  );
+
+  try {
+    await sendNipaMailHtml(email, "Manual Registration Confirmed - 25th ACCP 2026", htmlContent);
+    console.log(`Manual registration email sent to ${email} [${regCode}]`);
+  } catch (error) {
+    console.error("Error sending manual registration email:", error);
+    throw error;
+  }
+}
+
+// ============================================
 // ABSTRACT EMAILS
 // ============================================
 
