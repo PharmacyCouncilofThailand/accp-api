@@ -14,6 +14,7 @@ export default async function (fastify: FastifyInstance) {
         .select({
           id: users.id,
           email: users.email,
+          role: users.role,
           firstName: users.firstName,
           lastName: users.lastName,
           phone: users.phone,

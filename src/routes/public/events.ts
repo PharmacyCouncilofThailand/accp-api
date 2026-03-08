@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { events } from "../../database/schema.js";
+import { events, eventImages, sessions, ticketTypes } from "../../database/schema.js";
 import { eq, desc } from "drizzle-orm";
 
 export default async function publicEventsRoutes(fastify: FastifyInstance) {
@@ -18,6 +18,8 @@ export default async function publicEventsRoutes(fastify: FastifyInstance) {
           location: events.location,
           eventType: events.eventType,
           status: events.status,
+          imageUrl: events.imageUrl,
+          coverImage: events.coverImage,
         })
         .from(events)
         .where(eq(events.status, "published"))
@@ -53,7 +55,34 @@ export default async function publicEventsRoutes(fastify: FastifyInstance) {
         return reply.status(404).send({ error: "Event not found" });
       }
 
-      return reply.send({ event });
+      // Fetch venue images for this event
+      const venueImages = await db
+        .select()
+        .from(eventImages)
+        .where(eq(eventImages.eventId, event.id))
+        .orderBy(eventImages.sortOrder);
+
+      // Fetch sessions for this event
+      const sessionList = await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.eventId, event.id))
+        .orderBy(sessions.startTime);
+
+      // Fetch ticket types for this event
+      const ticketList = await db
+        .select()
+        .from(ticketTypes)
+        .where(eq(ticketTypes.eventId, event.id));
+
+      return reply.send({
+        event: {
+          ...event,
+          images: venueImages,
+          sessions: sessionList,
+          ticketTypes: ticketList,
+        },
+      });
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: "Failed to fetch event" });

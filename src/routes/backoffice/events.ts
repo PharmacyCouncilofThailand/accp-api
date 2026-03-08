@@ -293,6 +293,7 @@ export default async function (fastify: FastifyInstance) {
             data.cpeCredits != null ? String(data.cpeCredits) : undefined,
           status: data.status,
           imageUrl: data.imageUrl,
+          coverImage: data.coverImage,
           mapUrl: data.mapUrl,
           abstractStartDate: data.abstractStartDate
             ? new Date(new Date(data.abstractStartDate).setHours(0, 0, 0, 0))

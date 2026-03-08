@@ -14,8 +14,9 @@ export const createEventSchema = z.object({
     conferenceCode: z.string().max(100).optional(),
     cpeCredits: z.preprocess((val) => val === "" ? undefined : Number(val), z.number().min(0).optional()),
     status: z.enum(["draft", "published", "cancelled", "completed"]).default("draft"),
-    imageUrl: z.string().max(500).optional(),
-    mapUrl: z.string().max(500).optional(),
+    imageUrl: z.preprocess((val) => val === "" ? undefined : val, z.string().max(500).optional()),
+    coverImage: z.preprocess((val) => val === "" ? undefined : val, z.string().max(500).optional()),
+    mapUrl: z.preprocess((val) => val === "" ? undefined : val, z.string().max(500).optional()),
     abstractStartDate: z.string().datetime().optional(),
     abstractEndDate: z.string().datetime().optional(),
 });
@@ -44,7 +45,7 @@ export const createSessionSchema = z.object({
 export const updateSessionSchema = createSessionSchema.partial();
 
 // Canonical role values matching the DB user_role enum
-export const VALID_TICKET_ROLES = ["thstd", "thpro", "interstd", "interpro"] as const;
+export const VALID_TICKET_ROLES = ["thstd", "thpro", "interstd", "interpro", "general"] as const;
 
 // Valid ticket priorities
 export const VALID_TICKET_PRIORITIES = [

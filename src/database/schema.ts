@@ -21,6 +21,7 @@ export const userRoleEnum = pgEnum("user_role", [
   "interstd",
   "thpro",
   "interpro",
+  "general",
 ]);
 export const accountStatusEnum = pgEnum("account_status", [
   "pending_approval",
@@ -172,6 +173,7 @@ export const events = pgTable("events", {
   cpeCredits: decimal("cpe_credits", { precision: 5, scale: 2 }).default("0"),
   status: eventStatusEnum("status").notNull().default("draft"),
   imageUrl: varchar("image_url", { length: 500 }),
+  coverImage: varchar("cover_image", { length: 500 }),
   mapUrl: varchar("map_url", { length: 500 }),
   abstractStartDate: timestamp("abstract_start_date"),
   abstractEndDate: timestamp("abstract_end_date"),

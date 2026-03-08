@@ -25,13 +25,14 @@ function getDriveClient() {
 }
 
 // Folder type mapping
-export type UploadFolderType = "student_docs" | "abstracts" | "speakers" | "venue_images";
+export type UploadFolderType = "student_docs" | "abstracts" | "speakers" | "venue_images" | "event_images";
 
 const FOLDER_ENV_MAP: Record<UploadFolderType, string> = {
   student_docs: "GOOGLE_DRIVE_FOLDER_STUDENT_DOCS",
   abstracts: "GOOGLE_DRIVE_FOLDER_ABSTRACTS",
   speakers: "GOOGLE_DRIVE_FOLDER_SPEAKERS",
   venue_images: "GOOGLE_DRIVE_FOLDER_VENUE_IMAGES",
+  event_images: "GOOGLE_DRIVE_FOLDER_EVENT_IMAGES",
 };
 
 // Abstract category type (matches database enum)

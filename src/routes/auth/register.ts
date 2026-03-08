@@ -13,6 +13,7 @@ const roleMapping = {
   internationalStudent: "interstd",
   thaiProfessional: "thpro",
   internationalProfessional: "interpro",
+  generalPublic: "general",
 } as const;
 
 // Allowed file types for verification documents
@@ -89,6 +90,7 @@ export async function authRoutes(fastify: FastifyInstance) {
         country,
         phone,
         recaptchaToken,
+        source,
       } = result.data;
 
       // Verify reCAPTCHA if enabled
@@ -195,13 +197,15 @@ export async function authRoutes(fastify: FastifyInstance) {
       // 6. Determine role & country
       const role = roleMapping[accountType];
       const userCountry =
-        accountType === "thaiStudent" || accountType === "thaiProfessional"
+        accountType === "thaiStudent" || accountType === "thaiProfessional" || accountType === "generalPublic"
           ? "Thailand"
           : country;
 
-      // Auto-approve professionals
-      const initialStatus =
-        role === "thpro" || role === "interpro" ? "active" : "pending_approval";
+      // Determine auto-approval based on source and role
+      const isConferenceWeb = source === "conference-web";
+      const isAutoApprovedRole = role === "thpro" || role === "interpro" || role === "general";
+      
+      const initialStatus = isConferenceWeb || isAutoApprovedRole ? "active" : "pending_approval";
 
       // 7. Insert user
       const [newUser] = await db
@@ -223,24 +227,22 @@ export async function authRoutes(fastify: FastifyInstance) {
         })
         .returning();
 
-      // 8. Send auto-reply email based on role
-      if (role === "thstd" || role === "interstd") {
-        // Send pending approval email for students
-        try {
-          await sendPendingApprovalEmail(email, firstName, lastName);
-          fastify.log.info(`Pending approval email sent to ${email}`);
-        } catch (emailError) {
-          // Log error but don't fail registration
-          fastify.log.error({ err: emailError }, "Failed to send pending approval email");
-        }
-      } else if (role === "thpro" || role === "interpro") {
-        // Send signup notification email for professionals (non-students)
+      // 8. Send auto-reply emails
+      if (initialStatus === "active") {
+        // Send signup notification email for auto-approved users
         try {
           await sendSignupNotificationEmail(email, firstName, lastName);
           fastify.log.info(`Signup notification email sent to ${email}`);
         } catch (emailError) {
-          // Log error but don't fail registration
           fastify.log.error({ err: emailError }, "Failed to send signup notification email");
+        }
+      } else {
+        // Send pending approval email for accp students
+        try {
+          await sendPendingApprovalEmail(email, firstName, lastName);
+          fastify.log.info(`Pending approval email sent to ${email}`);
+        } catch (emailError) {
+          fastify.log.error({ err: emailError }, "Failed to send pending approval email");
         }
       }
 

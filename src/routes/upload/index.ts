@@ -1,5 +1,7 @@
 import { FastifyInstance, FastifyRequest } from "fastify";
 import { uploadToGoogleDrive, UploadFolderType, getFileStream, extractFileIdFromUrl } from "../../services/googleDrive.js";
+import fs from "fs/promises";
+import path from "path";
 
 // Allowed file types
 const ALLOWED_MIME_TYPES = [
@@ -49,20 +51,50 @@ async function handleFileUpload(
     };
   }
 
-  // Upload to Google Drive
-  const url = await uploadToGoogleDrive(
-    fileBuffer,
-    data.filename,
-    data.mimetype,
-    folderType
-  );
+  try {
+    // Upload to Google Drive
+    const url = await uploadToGoogleDrive(
+      fileBuffer,
+      data.filename,
+      data.mimetype,
+      folderType
+    );
 
-  return {
-    success: true,
-    status: 200,
-    url,
-    filename: data.filename,
-  };
+    return {
+      success: true,
+      status: 200,
+      url,
+      filename: data.filename,
+    };
+  } catch (error: any) {
+    const errorMsg = error.message?.toLowerCase() || "";
+    if (
+      errorMsg.includes("environment variable not set") ||
+      errorMsg.includes("invalid_client") ||
+      errorMsg.includes("invalid_grant") ||
+      errorMsg.includes("unauthorized_client") ||
+      errorMsg.includes("no refresh token")
+    ) {
+      const uploadDir = path.join(process.cwd(), 'public', 'uploads', folderType);
+      await fs.mkdir(uploadDir, { recursive: true });
+      
+      const uniqueFilename = `${Date.now()}-${data.filename.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+      const filePath = path.join(uploadDir, uniqueFilename);
+      
+      await fs.writeFile(filePath, fileBuffer);
+      
+      const baseUrl = process.env.API_URL || "http://localhost:3002";
+      const url = `${baseUrl}/public/uploads/${folderType}/${uniqueFilename}`;
+      
+      return {
+        success: true,
+        status: 200,
+        url,
+        filename: data.filename,
+      };
+    }
+    throw error;
+  }
 }
 
 export async function uploadRoutes(fastify: FastifyInstance) {
@@ -127,6 +159,23 @@ export async function uploadRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({
         success: false,
         error: "Failed to upload abstract. Please try again.",
+      });
+    }
+  });
+
+  /**
+   * POST /upload/event-image
+   * Upload event thumbnail/cover to Google Drive (event_images folder)
+   */
+  fastify.post("/event-image", { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    try {
+      const result = await handleFileUpload(request, "event_images");
+      return reply.status(result.status).send(result);
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: "Failed to upload event image",
       });
     }
   });

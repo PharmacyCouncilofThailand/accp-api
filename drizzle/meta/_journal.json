@@ -43,6 +43,13 @@
       "when": 1770911827875,
       "tag": "0005_chilly_lockjaw",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1772974831731,
+      "tag": "0006_lowly_malcolm_colcord",
+      "breakpoints": true
     }
   ]
 }

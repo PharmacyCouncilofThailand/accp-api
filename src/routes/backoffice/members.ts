@@ -22,7 +22,7 @@ const listMembersQuerySchema = z.object({
   page: z.coerce.number().min(1).default(1),
   limit: z.coerce.number().min(1).max(100).default(20),
   search: z.string().optional(),
-  role: z.enum(["thstd", "interstd", "thpro", "interpro"]).optional(),
+  role: z.enum(["thstd", "interstd", "thpro", "interpro", "general", "admin"]).optional(),
   status: z.enum(["pending_approval", "active", "rejected"]).optional(),
 });
 

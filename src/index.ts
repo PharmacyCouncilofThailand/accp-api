@@ -5,6 +5,13 @@ import multipart from "@fastify/multipart";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
 import { ApiError } from "./errors/ApiError.js";
+import fastifyStatic from "@fastify/static";
+import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // JWT Secret validation - always required
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -52,6 +59,18 @@ fastify.register(multipart, {
 });
 fastify.register(jwt, {
   secret: JWT_SECRET,
+});
+
+// ============================================================================
+// Static Files Serving
+// ============================================================================
+const publicPath = path.join(__dirname, '..', 'public');
+if (!fs.existsSync(publicPath)) {
+  fs.mkdirSync(publicPath, { recursive: true });
+}
+fastify.register(fastifyStatic, {
+  root: publicPath,
+  prefix: '/public/', 
 });
 
 // ============================================================================
@@ -176,7 +195,7 @@ fastify.register(authRoutes, { prefix: "/auth" });
 fastify.register(forgotPasswordRoutes, { prefix: "/auth" });
 fastify.register(resetPasswordRoutes, { prefix: "/auth" });
 fastify.register(resubmitDocumentRoutes, { prefix: "/auth" });
-fastify.register(uploadRoutes, { prefix: "/upload" });
+fastify.register(uploadRoutes, { prefix: "/api/upload" });
 fastify.register(backofficeLoginRoutes, { prefix: "/backoffice" });
 
 // Public API routes

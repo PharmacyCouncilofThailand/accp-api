@@ -10,6 +10,7 @@ export const registerBodySchema = z.object({
     "internationalStudent",
     "thaiProfessional",
     "internationalProfessional",
+    "generalPublic",
   ]),
   organization: z.string().optional(),
   idCard: z.string().length(13, "Thai ID Card must be 13 digits").optional(),
@@ -19,6 +20,7 @@ export const registerBodySchema = z.object({
   phone: z.string().optional(),
   verificationDocUrl: z.string().optional(),
   recaptchaToken: z.string().optional(),
+  source: z.string().optional(),
 });
 
 export const loginBodySchema = z.object({
