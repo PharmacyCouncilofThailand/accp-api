@@ -54,7 +54,7 @@ fastify.register(rateLimit, {
 // ============================================================================
 fastify.register(multipart, {
   limits: {
-    fileSize: 30 * 1024 * 1024, // 30MB
+    fileSize: 50 * 1024 * 1024, // 50MB
   },
 });
 fastify.register(jwt, {
@@ -70,7 +70,7 @@ if (!fs.existsSync(publicPath)) {
 }
 fastify.register(fastifyStatic, {
   root: publicPath,
-  prefix: '/public/', 
+  prefix: '/public/',
 });
 
 // ============================================================================

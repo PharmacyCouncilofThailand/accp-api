@@ -16,6 +16,7 @@ export const createEventSchema = z.object({
     status: z.enum(["draft", "published", "cancelled", "completed"]).default("draft"),
     imageUrl: z.preprocess((val) => val === "" ? undefined : val, z.string().max(500).optional()),
     coverImage: z.preprocess((val) => val === "" ? undefined : val, z.string().max(500).optional()),
+    videoUrl: z.string().max(2000).optional().nullable(),
     mapUrl: z.preprocess((val) => val === "" ? undefined : val, z.string().max(500).optional()),
     abstractStartDate: z.string().datetime().optional(),
     abstractEndDate: z.string().datetime().optional(),
@@ -49,8 +50,8 @@ export const VALID_TICKET_ROLES = ["thstd", "thpro", "interstd", "interpro", "ge
 
 // Valid ticket priorities
 export const VALID_TICKET_PRIORITIES = [
-  "early_bird",
-  "regular",
+    "early_bird",
+    "regular",
 ] as const;
 
 // Create Ticket Type Schema

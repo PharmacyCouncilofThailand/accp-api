@@ -20,6 +20,7 @@ export default async function publicEventsRoutes(fastify: FastifyInstance) {
           status: events.status,
           imageUrl: events.imageUrl,
           coverImage: events.coverImage,
+          videoUrl: events.videoUrl,
         })
         .from(events)
         .where(eq(events.status, "published"))
@@ -39,7 +40,7 @@ export default async function publicEventsRoutes(fastify: FastifyInstance) {
     try {
       // Check if id is numeric (ID) or string (event code)
       const isNumeric = /^\d+$/.test(id);
-      
+
       const [event] = await db
         .select()
         .from(events)

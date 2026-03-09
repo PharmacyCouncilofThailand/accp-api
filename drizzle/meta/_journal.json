@@ -50,6 +50,13 @@
       "when": 1772974831731,
       "tag": "0006_lowly_malcolm_colcord",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1773022643017,
+      "tag": "0007_serious_marvel_zombies",
+      "breakpoints": true
     }
   ]
 }

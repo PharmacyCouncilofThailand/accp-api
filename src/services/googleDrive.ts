@@ -229,12 +229,17 @@ export async function uploadToGoogleDrive(
 
   // Return appropriate URL based on file type
   // For images: use thumbnail URL (reliable for <img> tags)
+  // For videos: use webViewLink or direct play link
   // For PDFs/documents: use the actual file view link
   const isImage = mimeType.startsWith("image/");
+  const isVideo = mimeType.startsWith("video/");
 
   if (isImage) {
     // sz=w1000 requests a large thumbnail (width 1000px)
     return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`;
+  } else if (isVideo) {
+    // Return direct webContentLink if possible, otherwise embed link
+    return response.data.webViewLink?.replace('/view', '/preview') || `https://drive.google.com/file/d/${fileId}/preview`;
   } else {
     // For PDFs and other documents, return the view link
     return `https://drive.google.com/file/d/${fileId}/view`;

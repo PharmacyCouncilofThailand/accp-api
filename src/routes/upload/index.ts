@@ -10,10 +10,12 @@ const ALLOWED_MIME_TYPES = [
   "image/jpg",
   "image/png",
   "image/webp",
+  "video/mp4",
+  "video/webm",
 ];
 
-// Max file size: 10MB
-const MAX_FILE_SIZE = 10 * 1024 * 1024;
+// Max file size: 50MB
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
 // Helper function to handle file upload
 async function handleFileUpload(
@@ -31,7 +33,7 @@ async function handleFileUpload(
     return {
       success: false,
       status: 400,
-      error: "Invalid file type. Only PDF, JPG, and PNG are allowed.",
+      error: "Invalid file type. Only PDF, JPG, PNG, WEBP, MP4, and WEBM are allowed.",
     };
   }
 
@@ -47,7 +49,7 @@ async function handleFileUpload(
     return {
       success: false,
       status: 400,
-      error: "File too large. Maximum size is 10MB.",
+      error: "File too large. Maximum size is 50MB.",
     };
   }
 
@@ -77,15 +79,15 @@ async function handleFileUpload(
     ) {
       const uploadDir = path.join(process.cwd(), 'public', 'uploads', folderType);
       await fs.mkdir(uploadDir, { recursive: true });
-      
+
       const uniqueFilename = `${Date.now()}-${data.filename.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
       const filePath = path.join(uploadDir, uniqueFilename);
-      
+
       await fs.writeFile(filePath, fileBuffer);
-      
+
       const baseUrl = process.env.API_URL || "http://localhost:3002";
       const url = `${baseUrl}/public/uploads/${folderType}/${uniqueFilename}`;
-      
+
       return {
         success: true,
         status: 200,

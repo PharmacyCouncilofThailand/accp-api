@@ -174,6 +174,7 @@ export const events = pgTable("events", {
   status: eventStatusEnum("status").notNull().default("draft"),
   imageUrl: varchar("image_url", { length: 500 }),
   coverImage: varchar("cover_image", { length: 500 }),
+  videoUrl: varchar("video_url", { length: 2000 }),
   mapUrl: varchar("map_url", { length: 500 }),
   abstractStartDate: timestamp("abstract_start_date"),
   abstractEndDate: timestamp("abstract_end_date"),

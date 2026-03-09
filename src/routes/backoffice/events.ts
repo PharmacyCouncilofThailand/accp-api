@@ -202,14 +202,14 @@ export default async function (fastify: FastifyInstance) {
       const allSpeakers =
         sessionIds.length > 0
           ? await db
-              .select({
-                sessionId: eventSpeakers.sessionId,
-                firstName: speakers.firstName,
-                lastName: speakers.lastName,
-              })
-              .from(eventSpeakers)
-              .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
-              .where(inArray(eventSpeakers.sessionId, sessionIds))
+            .select({
+              sessionId: eventSpeakers.sessionId,
+              firstName: speakers.firstName,
+              lastName: speakers.lastName,
+            })
+            .from(eventSpeakers)
+            .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
+            .where(inArray(eventSpeakers.sessionId, sessionIds))
           : [];
 
       // Group speakers by session in memory
@@ -294,6 +294,7 @@ export default async function (fastify: FastifyInstance) {
           status: data.status,
           imageUrl: data.imageUrl,
           coverImage: data.coverImage,
+          videoUrl: data.videoUrl,
           mapUrl: data.mapUrl,
           abstractStartDate: data.abstractStartDate
             ? new Date(new Date(data.abstractStartDate).setHours(0, 0, 0, 0))
@@ -450,14 +451,14 @@ export default async function (fastify: FastifyInstance) {
       const allSpeakers =
         sessionIds.length > 0
           ? await db
-              .select({
-                sessionId: eventSpeakers.sessionId,
-                firstName: speakers.firstName,
-                lastName: speakers.lastName,
-              })
-              .from(eventSpeakers)
-              .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
-              .where(inArray(eventSpeakers.sessionId, sessionIds))
+            .select({
+              sessionId: eventSpeakers.sessionId,
+              firstName: speakers.firstName,
+              lastName: speakers.lastName,
+            })
+            .from(eventSpeakers)
+            .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
+            .where(inArray(eventSpeakers.sessionId, sessionIds))
           : [];
 
       // Group speakers by session in memory
@@ -703,9 +704,9 @@ export default async function (fastify: FastifyInstance) {
       const allSessionLinks =
         ticketIds.length > 0
           ? await db
-              .select()
-              .from(ticketSessions)
-              .where(inArray(ticketSessions.ticketTypeId, ticketIds))
+            .select()
+            .from(ticketSessions)
+            .where(inArray(ticketSessions.ticketTypeId, ticketIds))
           : [];
 
       // Group session links by ticket in memory
