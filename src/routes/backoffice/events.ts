@@ -285,8 +285,8 @@ export default async function (fastify: FastifyInstance) {
           eventType: data.eventType,
           location: data.location,
           category: data.category,
-          startDate: new Date(new Date(data.startDate).setHours(0, 0, 0, 0)),
-          endDate: new Date(new Date(data.endDate).setHours(0, 0, 0, 0)),
+          startDate: new Date(data.startDate),
+          endDate: new Date(data.endDate),
           maxCapacity: data.maxCapacity,
           conferenceCode: data.conferenceCode,
           cpeCredits:
@@ -351,11 +351,9 @@ export default async function (fastify: FastifyInstance) {
 
       // Convert date strings to Date objects
       if (data.startDate)
-        updates.startDate = new Date(
-          new Date(data.startDate).setHours(0, 0, 0, 0),
-        );
+        updates.startDate = new Date(data.startDate);
       if (data.endDate)
-        updates.endDate = new Date(new Date(data.endDate).setHours(0, 0, 0, 0));
+        updates.endDate = new Date(data.endDate);
       if (data.abstractStartDate)
         updates.abstractStartDate = new Date(
           new Date(data.abstractStartDate).setHours(0, 0, 0, 0),
