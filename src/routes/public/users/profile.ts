@@ -20,6 +20,7 @@ export default async function (fastify: FastifyInstance) {
           phone: users.phone,
           country: users.country,
           institution: users.institution,
+          pharmacyLicenseId: users.pharmacyLicenseId,
         })
         .from(users)
         .where(eq(users.id, request.user.id))

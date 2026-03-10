@@ -17,9 +17,13 @@ export const createEventSchema = z.object({
     imageUrl: z.preprocess((val) => val === "" ? undefined : val, z.string().max(500).optional()),
     coverImage: z.preprocess((val) => val === "" ? undefined : val, z.string().max(500).optional()),
     videoUrl: z.string().max(2000).optional().nullable(),
-    mapUrl: z.preprocess((val) => val === "" ? undefined : val, z.string().max(500).optional()),
+    mapUrl: z.preprocess((val) => val === "" ? undefined : val, z.string().max(2000).optional()),
     abstractStartDate: z.string().datetime().optional(),
     abstractEndDate: z.string().datetime().optional(),
+    documents: z.array(z.object({
+        name: z.string().min(1),
+        url: z.string().url()
+    })).optional().default([]),
 });
 
 // Update Event Schema

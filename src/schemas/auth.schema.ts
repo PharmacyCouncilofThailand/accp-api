@@ -21,12 +21,21 @@ export const registerBodySchema = z.object({
   verificationDocUrl: z.string().optional(),
   recaptchaToken: z.string().optional(),
   source: z.string().optional(),
+}).refine(data => {
+  if (data.accountType === "thaiProfessional" && !data.pharmacyLicenseId) return false;
+  return true;
+}, {
+  message: "Pharmacy License ID is required for Thai Professionals",
+  path: ["pharmacyLicenseId"]
 });
 
 export const loginBodySchema = z.object({
-  email: z.string().email("Invalid email address"),
+  email: z.string().email("Invalid email address").optional(),
+  pharmacyLicenseId: z.string().optional(),
   password: z.string().min(1, "Password is required"),
   recaptchaToken: z.string().optional(),
+}).refine(data => data.email || data.pharmacyLicenseId, {
+  message: "Either email or pharmacyLicenseId is required",
 });
 
 export type RegisterInput = z.infer<typeof registerBodySchema>;

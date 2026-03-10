@@ -302,6 +302,7 @@ export default async function (fastify: FastifyInstance) {
           abstractEndDate: data.abstractEndDate
             ? new Date(new Date(data.abstractEndDate).setHours(0, 0, 0, 0))
             : null,
+          documents: data.documents,
         })
         .returning();
 

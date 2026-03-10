@@ -21,6 +21,7 @@ export default async function publicEventsRoutes(fastify: FastifyInstance) {
           imageUrl: events.imageUrl,
           coverImage: events.coverImage,
           videoUrl: events.videoUrl,
+          documents: events.documents,
         })
         .from(events)
         .where(eq(events.status, "published"))

@@ -175,9 +175,12 @@ export const events = pgTable("events", {
   imageUrl: varchar("image_url", { length: 500 }),
   coverImage: varchar("cover_image", { length: 500 }),
   videoUrl: varchar("video_url", { length: 2000 }),
-  mapUrl: varchar("map_url", { length: 500 }),
+  mapUrl: varchar("map_url", { length: 2000 }),
   abstractStartDate: timestamp("abstract_start_date"),
   abstractEndDate: timestamp("abstract_end_date"),
+  documents: jsonb("documents")
+    .$type<{ name: string; url: string }[]>()
+    .default([]),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

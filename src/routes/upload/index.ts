@@ -6,6 +6,10 @@ import path from "path";
 // Allowed file types
 const ALLOWED_MIME_TYPES = [
   "application/pdf",
+  "application/msword", // .doc
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+  "application/vnd.ms-excel", // .xls
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", // .xlsx
   "image/jpeg",
   "image/jpg",
   "image/png",
@@ -33,7 +37,7 @@ async function handleFileUpload(
     return {
       success: false,
       status: 400,
-      error: "Invalid file type. Only PDF, JPG, PNG, WEBP, MP4, and WEBM are allowed.",
+      error: "Invalid file type. Only PDF, DOC/X, XLS/X, JPG, PNG, WEBP, MP4, and WEBM are allowed.",
     };
   }
 
@@ -195,6 +199,23 @@ export async function uploadRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({
         success: false,
         error: "Failed to upload venue image",
+      });
+    }
+  });
+
+  /**
+   * POST /upload/event-document
+   * Upload event document to Google Drive (event_documents folder)
+   */
+  fastify.post("/event-document", { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    try {
+      const result = await handleFileUpload(request, "event_documents");
+      return reply.status(result.status).send(result);
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: "Failed to upload event document",
       });
     }
   });
