@@ -25,13 +25,15 @@ function getDriveClient() {
 }
 
 // Folder type mapping
-export type UploadFolderType = "student_docs" | "abstracts" | "speakers" | "venue_images";
+export type UploadFolderType = "student_docs" | "abstracts" | "speakers" | "venue_images" | "event_images" | "event_documents";
 
 const FOLDER_ENV_MAP: Record<UploadFolderType, string> = {
   student_docs: "GOOGLE_DRIVE_FOLDER_STUDENT_DOCS",
   abstracts: "GOOGLE_DRIVE_FOLDER_ABSTRACTS",
   speakers: "GOOGLE_DRIVE_FOLDER_SPEAKERS",
   venue_images: "GOOGLE_DRIVE_FOLDER_VENUE_IMAGES",
+  event_images: "GOOGLE_DRIVE_FOLDER_EVENT_IMAGES",
+  event_documents: "GOOGLE_DRIVE_FOLDER_EVENT_DOCUMENTS",
 };
 
 // Abstract category type (matches database enum)
@@ -228,12 +230,17 @@ export async function uploadToGoogleDrive(
 
   // Return appropriate URL based on file type
   // For images: use thumbnail URL (reliable for <img> tags)
+  // For videos: use webViewLink or direct play link
   // For PDFs/documents: use the actual file view link
   const isImage = mimeType.startsWith("image/");
+  const isVideo = mimeType.startsWith("video/");
 
   if (isImage) {
     // sz=w1000 requests a large thumbnail (width 1000px)
     return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`;
+  } else if (isVideo) {
+    // Return direct webContentLink if possible, otherwise embed link
+    return response.data.webViewLink?.replace('/view', '/preview') || `https://drive.google.com/file/d/${fileId}/preview`;
   } else {
     // For PDFs and other documents, return the view link
     return `https://drive.google.com/file/d/${fileId}/view`;

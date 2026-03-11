@@ -294,6 +294,8 @@ async function resolveTicketId(
       eventId: ticketTypes.eventId,
       isActive: ticketTypes.isActive,
       displayOrder: ticketTypes.displayOrder,
+      saleStartDate: ticketTypes.saleStartDate,
+      saleEndDate: ticketTypes.saleEndDate,
     })
     .from(ticketTypes)
     .where(
@@ -303,7 +305,16 @@ async function resolveTicketId(
       )
     );
 
-  const active = allTickets.filter((t) => t.isActive !== false);
+  const now = new Date();
+  const active = allTickets.filter((t) => {
+    if (t.isActive === false) return false;
+    // Filter out tickets not within their sale period
+    const saleStart = t.saleStartDate ? new Date(t.saleStartDate) : null;
+    const saleEnd = t.saleEndDate ? new Date(t.saleEndDate) : null;
+    if (saleStart && now < saleStart) return false;
+    if (saleEnd && now > saleEnd) return false;
+    return true;
+  });
 
   if (category === "primary") {
     // Match by role pattern in allowedRoles
@@ -1075,18 +1086,46 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             });
           }
 
-          // Check availability
+          // Check availability and sale period
           const [currentTicket] = await db
-            .select({ quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
+            .select({
+              quota: ticketTypes.quota,
+              soldCount: ticketTypes.soldCount,
+              saleStartDate: ticketTypes.saleStartDate,
+              saleEndDate: ticketTypes.saleEndDate,
+            })
             .from(ticketTypes)
             .where(eq(ticketTypes.id, primaryTicket.id))
             .limit(1);
 
-          if (currentTicket && currentTicket.soldCount >= currentTicket.quota) {
-            return reply.status(400).send({
-              success: false,
-              error: "Ticket sold out",
-            });
+          if (currentTicket) {
+            const now = new Date();
+            const saleStart = currentTicket.saleStartDate ? new Date(currentTicket.saleStartDate) : null;
+            const saleEnd = currentTicket.saleEndDate ? new Date(currentTicket.saleEndDate) : null;
+
+            if (saleStart && now < saleStart) {
+              return reply.status(400).send({
+                success: false,
+                error: "Ticket sales have not started yet",
+                code: "SALE_NOT_STARTED",
+                saleStartDate: saleStart.toISOString(),
+              });
+            }
+
+            if (saleEnd && now > saleEnd) {
+              return reply.status(400).send({
+                success: false,
+                error: "Ticket sales have ended",
+                code: "SALE_ENDED",
+              });
+            }
+
+            if (currentTicket.soldCount >= currentTicket.quota) {
+              return reply.status(400).send({
+                success: false,
+                error: "Ticket sold out",
+              });
+            }
           }
         }
 
