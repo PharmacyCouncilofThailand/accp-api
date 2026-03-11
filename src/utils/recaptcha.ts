@@ -52,6 +52,6 @@ export async function verifyRecaptcha(token: string): Promise<boolean> {
  * Check if reCAPTCHA verification is enabled
  */
 export function isRecaptchaEnabled(): boolean {
-  // Enable only in production when secret key is configured
-  return process.env.NODE_ENV === 'production' && !!process.env.RECAPTCHA_SECRET_KEY;
+  // Enable when secret key is configured (both dev and prod)
+  return !!process.env.RECAPTCHA_SECRET_KEY;
 }
