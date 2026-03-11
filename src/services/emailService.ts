@@ -688,7 +688,7 @@ export async function sendPasswordResetEmail(
 Dear ${firstName},
 
 We received a request to reset your password for your 25th ACCP 2026 account.
-
+cp
 Click the link below to create a new password:
 ${resetUrl}
 

@@ -4,11 +4,13 @@ import {
   backofficeUsers,
   staffEventAssignments,
   events,
+  sessions,
 } from "../../database/schema.js";
 import {
   createUserSchema,
   updateUserSchema,
   assignEventSchema,
+  assignEventsAndSessionsSchema,
 } from "../../schemas/backoffice-users.schema.js";
 import bcrypt from "bcryptjs";
 import { eq, desc, ne, and, ilike, or, count, SQL } from "drizzle-orm";
@@ -80,20 +82,38 @@ export default async function (fastify: FastifyInstance) {
         .limit(limit)
         .offset(offset);
 
-      // Fetch assignments for each user
+      // Fetch assignments for each user (with session details)
       const usersWithAssignments = await Promise.all(
         users.map(async (user) => {
           if (user.role === "admin") {
-            return { ...user, assignedEventIds: [] };
+            return { ...user, assignedEventIds: [], assignments: [] };
           }
-          const assignments = await db
-            .select({ eventId: staffEventAssignments.eventId })
+          const rawAssignments = await db
+            .select({
+              eventId: staffEventAssignments.eventId,
+              sessionId: staffEventAssignments.sessionId,
+            })
             .from(staffEventAssignments)
             .where(eq(staffEventAssignments.staffId, user.id));
 
+          // Deduplicate eventIds
+          const assignedEventIds = [...new Set(rawAssignments.map((a) => a.eventId))];
+
+          // Group by event with session list
+          const eventMap = new Map<number, number[]>();
+          for (const a of rawAssignments) {
+            if (!eventMap.has(a.eventId)) eventMap.set(a.eventId, []);
+            if (a.sessionId) eventMap.get(a.eventId)!.push(a.sessionId);
+          }
+          const assignments = Array.from(eventMap.entries()).map(([eventId, sessionIds]) => ({
+            eventId,
+            sessionIds,
+          }));
+
           return {
             ...user,
-            assignedEventIds: assignments.map((a) => a.eventId),
+            assignedEventIds,
+            assignments,
           };
         })
       );
@@ -246,7 +266,7 @@ export default async function (fastify: FastifyInstance) {
     }
   });
 
-  // Assign Events
+  // Assign Events (legacy — event-level only)
   fastify.post("/:id/assignments", async (request, reply) => {
     const { id } = request.params as { id: string };
     const result = assignEventSchema.safeParse(request.body);
@@ -281,6 +301,52 @@ export default async function (fastify: FastifyInstance) {
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: "Failed to assign events" });
+    }
+  });
+
+  // Assign Events + Sessions (new — supports session-level granularity)
+  fastify.put("/:id/assignments", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const result = assignEventsAndSessionsSchema.safeParse(request.body);
+    if (!result.success) {
+      return reply
+        .status(400)
+        .send({ error: "Invalid input", details: result.error.flatten() });
+    }
+
+    const { assignments } = result.data;
+    const userId = parseInt(id);
+
+    try {
+      await db.transaction(async (tx) => {
+        // Clear existing assignments
+        await tx
+          .delete(staffEventAssignments)
+          .where(eq(staffEventAssignments.staffId, userId));
+
+        // Build rows: one per event (no sessions) OR one per session
+        const rows: { staffId: number; eventId: number; sessionId?: number }[] = [];
+        for (const a of assignments) {
+          if (!a.sessionIds || a.sessionIds.length === 0) {
+            // Event-level assignment (all sessions)
+            rows.push({ staffId: userId, eventId: a.eventId });
+          } else {
+            // Session-level assignments
+            for (const sid of a.sessionIds) {
+              rows.push({ staffId: userId, eventId: a.eventId, sessionId: sid });
+            }
+          }
+        }
+
+        if (rows.length > 0) {
+          await tx.insert(staffEventAssignments).values(rows);
+        }
+      });
+
+      return reply.send({ success: true });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ error: "Failed to assign events/sessions" });
     }
   });
 }

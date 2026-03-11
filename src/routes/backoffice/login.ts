@@ -4,6 +4,7 @@ import {
   backofficeUsers,
   staffEventAssignments,
   events,
+  sessions,
 } from "../../database/schema.js";
 import { backofficeLoginSchema } from "../../schemas/backoffice.schema.js";
 import bcrypt from "bcryptjs";
@@ -68,24 +69,67 @@ export default async function (fastify: FastifyInstance) {
         });
       }
 
-      // 5. Get assigned events (skip for admin)
+      // 5. Get assigned events + sessions (skip for admin)
       let assignedEvents: { id: number; code: string; name: string }[] = [];
+      let assignedSessions: {
+        eventId: number;
+        sessionId: number;
+        sessionName: string;
+        sessionType: string | null;
+        room: string | null;
+        startTime: Date;
+        endTime: Date;
+      }[] = [];
+
       if (staff.role !== "admin") {
-        const assignments = await db
+        const rawAssignments = await db
           .select({
             eventId: events.id,
             eventCode: events.eventCode,
             eventName: events.eventName,
+            sessionId: staffEventAssignments.sessionId,
           })
           .from(staffEventAssignments)
           .innerJoin(events, eq(staffEventAssignments.eventId, events.id))
           .where(eq(staffEventAssignments.staffId, staff.id));
 
-        assignedEvents = assignments.map((a) => ({
-          id: a.eventId,
-          code: a.eventCode,
-          name: a.eventName,
-        }));
+        // Deduplicate events
+        const eventMap = new Map<number, { id: number; code: string; name: string }>();
+        const sessionIdsToFetch: number[] = [];
+        for (const a of rawAssignments) {
+          if (!eventMap.has(a.eventId)) {
+            eventMap.set(a.eventId, { id: a.eventId, code: a.eventCode, name: a.eventName });
+          }
+          if (a.sessionId) sessionIdsToFetch.push(a.sessionId);
+        }
+        assignedEvents = Array.from(eventMap.values());
+
+        // Fetch session details if any session-level assignments exist
+        if (sessionIdsToFetch.length > 0) {
+          const { inArray } = await import("drizzle-orm");
+          const sessionRows = await db
+            .select({
+              id: sessions.id,
+              eventId: sessions.eventId,
+              sessionName: sessions.sessionName,
+              sessionType: sessions.sessionType,
+              room: sessions.room,
+              startTime: sessions.startTime,
+              endTime: sessions.endTime,
+            })
+            .from(sessions)
+            .where(inArray(sessions.id, sessionIdsToFetch));
+
+          assignedSessions = sessionRows.map((s) => ({
+            eventId: s.eventId,
+            sessionId: s.id,
+            sessionName: s.sessionName,
+            sessionType: s.sessionType,
+            room: s.room,
+            startTime: s.startTime,
+            endTime: s.endTime,
+          }));
+        }
       }
 
       // 6. Sign JWT (include assignedCategories and assignedPresentationTypes for reviewers)
@@ -111,6 +155,7 @@ export default async function (fastify: FastifyInstance) {
           lastName: staff.lastName,
           role: staff.role,
           assignedEvents,
+          assignedSessions,
           assignedCategories: staff.assignedCategories || [],
           assignedPresentationTypes: staff.assignedPresentationTypes || [],
         },
