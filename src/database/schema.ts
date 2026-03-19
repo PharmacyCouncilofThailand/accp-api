@@ -133,6 +133,23 @@ export const passwordResetTokens = pgTable("password_reset_tokens", {
 });
 
 // --------------------------------------------------------------------------
+// 2A2. SSO TOKENS (One-Time Token for cross-app SSO)
+// --------------------------------------------------------------------------
+export const ssoTokens = pgTable("sso_tokens", {
+  id: serial("id").primaryKey(),
+  token: varchar("token", { length: 255 }).notNull().unique(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  eventId: integer("event_id").references(() => events.id, { onDelete: "set null" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  used: boolean("used").default(false).notNull(),
+  sourceApp: varchar("source_app", { length: 50 }).notNull(),
+  targetApp: varchar("target_app", { length: 50 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+// --------------------------------------------------------------------------
 // 2B. BACKOFFICE STAFF
 // --------------------------------------------------------------------------
 export const backofficeUsers = pgTable("backoffice_users", {
@@ -176,6 +193,7 @@ export const events = pgTable("events", {
   coverImage: varchar("cover_image", { length: 500 }),
   videoUrl: varchar("video_url", { length: 2000 }),
   mapUrl: varchar("map_url", { length: 2000 }),
+  websiteUrl: varchar("website_url", { length: 500 }),
   abstractStartDate: timestamp("abstract_start_date"),
   abstractEndDate: timestamp("abstract_end_date"),
   documents: jsonb("documents")

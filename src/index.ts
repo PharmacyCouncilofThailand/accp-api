@@ -28,11 +28,11 @@ const fastify = Fastify({ logger: true });
 // ============================================================================
 const corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
-  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001'];
+  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001', 'http://localhost:3003', 'http://127.0.0.1:3003'];
 
 fastify.register(cors, {
   origin: corsOrigins,
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Source-App'],
   credentials: true
 });
 
@@ -142,6 +142,7 @@ import loginRoutes from "./routes/auth/login.js";
 import forgotPasswordRoutes from "./routes/auth/forgot-password.js";
 import resetPasswordRoutes from "./routes/auth/reset-password.js";
 import resubmitDocumentRoutes from "./routes/auth/resubmit-document.js";
+import ssoRoutes from "./routes/auth/sso.js";
 import { uploadRoutes } from "./routes/upload/index.js";
 import backofficeLoginRoutes from "./routes/backoffice/login.js";
 import backofficeUsersRoutes from "./routes/backoffice/users.js";
@@ -192,6 +193,7 @@ fastify.register(async (authPlugin) => {
 }, { prefix: "/auth" });
 
 fastify.register(authRoutes, { prefix: "/auth" });
+fastify.register(ssoRoutes, { prefix: "/auth" });
 fastify.register(forgotPasswordRoutes, { prefix: "/auth" });
 fastify.register(resetPasswordRoutes, { prefix: "/auth" });
 fastify.register(resubmitDocumentRoutes, { prefix: "/auth" });

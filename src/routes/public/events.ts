@@ -1,7 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { events, eventImages, sessions, ticketTypes } from "../../database/schema.js";
-import { eq, desc, min, asc } from "drizzle-orm";
+import { events, eventImages, sessions, ticketTypes, ticketSessions, registrations } from "../../database/schema.js";
+import { eq, desc, min, asc, sql, and, inArray } from "drizzle-orm";
 
 export default async function publicEventsRoutes(fastify: FastifyInstance) {
   // List all published events (public, no auth required)
@@ -21,6 +21,7 @@ export default async function publicEventsRoutes(fastify: FastifyInstance) {
           imageUrl: events.imageUrl,
           coverImage: events.coverImage,
           videoUrl: events.videoUrl,
+          websiteUrl: events.websiteUrl,
           documents: events.documents,
         })
         .from(events)
@@ -102,12 +103,55 @@ export default async function publicEventsRoutes(fastify: FastifyInstance) {
         .from(ticketTypes)
         .where(eq(ticketTypes.eventId, event.id));
 
+      // Fetch ticket-session mappings for workshop tickets
+      const ticketIds = ticketList.map(t => t.id);
+      let ticketSessionMap: Record<number, typeof sessionList> = {};
+      
+      if (ticketIds.length > 0) {
+        const ticketSessionRows = await db
+          .select({
+            ticketTypeId: ticketSessions.ticketTypeId,
+            sessionId: ticketSessions.sessionId,
+          })
+          .from(ticketSessions)
+          .where(inArray(ticketSessions.ticketTypeId, ticketIds));
+
+        // Group sessions by ticketTypeId
+        for (const row of ticketSessionRows) {
+          if (!ticketSessionMap[row.ticketTypeId]) {
+            ticketSessionMap[row.ticketTypeId] = [];
+          }
+          const session = sessionList.find(s => s.id === row.sessionId);
+          if (session) {
+            ticketSessionMap[row.ticketTypeId].push(session);
+          }
+        }
+      }
+
+      // Enrich ticket types with their sessions
+      const enrichedTicketList = ticketList.map(ticket => ({
+        ...ticket,
+        sessions: ticketSessionMap[ticket.id] || [],
+      }));
+
+      // Count registrations for this event (confirmed only)
+      const [regCount] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(registrations)
+        .where(
+          and(
+            eq(registrations.eventId, event.id),
+            eq(registrations.status, "confirmed")
+          )
+        );
+
       return reply.send({
         event: {
           ...event,
           images: venueImages,
           sessions: sessionList,
-          ticketTypes: ticketList,
+          ticketTypes: enrichedTicketList,
+          registeredCount: regCount?.count || 0,
         },
       });
     } catch (error) {

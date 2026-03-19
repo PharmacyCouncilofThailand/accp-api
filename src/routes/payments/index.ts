@@ -78,14 +78,14 @@ async function generatePaySolutionsRefno(): Promise<string> {
     // Ensure sequence exists (safe for new environments / DB resets)
     await db.execute(sql`
       CREATE SEQUENCE IF NOT EXISTS pay_solutions_refno_seq
-      START WITH 100001 INCREMENT BY 1 MINVALUE 100001 NO MAXVALUE CACHE 1
+      START WITH 10001 INCREMENT BY 1 MINVALUE 10001 NO MAXVALUE CACHE 1
     `);
 
-    // Bump sequence to at least 100001 if it was created with a lower start
-    // (prevents collision with any refno <= 100000 used in Pay Solutions panel)
+    // Bump sequence to at least 10001 if it was created with a lower start
+    // (prevents collision with any refno <= 10000 used in Pay Solutions panel)
     await db.execute(sql`
       SELECT setval('pay_solutions_refno_seq',
-        GREATEST(last_value, 100001), true)
+        GREATEST(last_value, 10001), true)
       FROM pay_solutions_refno_seq
     `);
   }
@@ -603,6 +603,79 @@ async function processSuccessfulPayment(
 
 export default async function paymentRoutes(fastify: FastifyInstance) {
   // ─────────────────────────────────────────────────────
+  // GET /payments/browser-return (NO AUTH — Pay Solutions redirect landing)
+  // Pay Solutions redirects the user's browser here after payment.
+  // We look up the event from refno and HTTP 302 to the correct frontend.
+  // ─────────────────────────────────────────────────────
+  fastify.get(
+    "/browser-return",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const query = request.query as Record<string, string>;
+      const refno = query.Refno || query.refno || "";
+
+      const CONFERENCE_WEB_URL = (
+        process.env.CONFERENCE_WEB_URL || "http://localhost:3003"
+      ).replace(/\/$/, "");
+
+      const defaultResultUrl = `${CONFERENCE_WEB_URL}/checkout/payment/result`;
+
+      if (!refno) {
+        fastify.log.warn("[BROWSER-RETURN] No refno in query, redirecting to default");
+        return reply.code(302).redirect(`${defaultResultUrl}?refno=`);
+      }
+
+      try {
+        // Find payment → order → event
+        const [payment] = await db
+          .select({ orderId: payments.orderId })
+          .from(payments)
+          .where(eq(payments.paySolutionsRefno, refno))
+          .limit(1);
+
+        if (!payment) {
+          fastify.log.warn(`[BROWSER-RETURN] Payment not found for refno=${refno}, redirecting to default`);
+          return reply.code(302).redirect(`${defaultResultUrl}?refno=${encodeURIComponent(refno)}`);
+        }
+
+        // Get eventId from order items
+        const [item] = await db
+          .select({ eventId: ticketTypes.eventId })
+          .from(orderItems)
+          .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+          .where(eq(orderItems.orderId, payment.orderId))
+          .limit(1);
+
+        if (!item) {
+          fastify.log.warn(`[BROWSER-RETURN] No order items for orderId=${payment.orderId}, redirecting to default`);
+          return reply.code(302).redirect(`${defaultResultUrl}?refno=${encodeURIComponent(refno)}`);
+        }
+
+        // Check if event has a dedicated website URL
+        const [event] = await db
+          .select({
+            websiteUrl: events.websiteUrl,
+          })
+          .from(events)
+          .where(eq(events.id, item.eventId))
+          .limit(1);
+
+        if (event?.websiteUrl) {
+          const targetUrl = event.websiteUrl.replace(/\/$/, "");
+          fastify.log.info(`[BROWSER-RETURN] Event has websiteUrl, redirecting to ${targetUrl}`);
+          return reply.code(302).redirect(`${targetUrl}/en/checkout/payment/result?refno=${encodeURIComponent(refno)}`);
+        }
+
+        // Default: redirect to conference-web
+        fastify.log.info(`[BROWSER-RETURN] Default redirect to conference-web`);
+        return reply.code(302).redirect(`${defaultResultUrl}?refno=${encodeURIComponent(refno)}`);
+      } catch (error) {
+        fastify.log.error(error, "[BROWSER-RETURN] Error looking up refno");
+        return reply.code(302).redirect(`${defaultResultUrl}?refno=${encodeURIComponent(refno)}`);
+      }
+    }
+  );
+
+  // ─────────────────────────────────────────────────────
   // GET /payments/my-purchases (JWT protected)
   // Returns what the current user has already purchased
   // ─────────────────────────────────────────────────────
@@ -709,6 +782,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           .select({
             registrationId: registrations.id,
             regCode: registrations.regCode,
+            eventId: registrations.eventId,
             status: registrations.status,
             dietaryRequirements: registrations.dietaryRequirements,
             purchasedAt: registrations.createdAt,
@@ -787,6 +861,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           data: {
             registration: {
               regCode: primaryRegistration.regCode,
+              eventId: primaryRegistration.eventId,
               status: primaryRegistration.status,
               ticketName: primaryRegistration.ticketName,
               priority: primaryRegistration.ticketPriority,
@@ -1325,6 +1400,129 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           });
         }
 
+        // ── FREE REGISTRATION PATH ──────────────────────────
+        // If chargeAmount is 0 (free ticket or 100% promo), process immediately
+        if (chargeAmount === 0) {
+          fastify.log.info(`[CREATE-INTENT] chargeAmount=0, processing free registration for order ${order.id}`);
+
+          // Mark order as paid immediately
+          await db.update(orders).set({ status: "paid" }).where(eq(orders.id, order.id));
+
+          // Create a payment record for auditing
+          await db.insert(payments).values({
+            orderId: order.id,
+            amount: "0",
+            status: "paid",
+            paymentChannel: "free",
+            paymentProvider: "pay_solutions",
+            providerRef: `FREE-${order.orderNumber}`,
+            providerStatus: "PAID",
+            paySolutionsRefno: null,
+            paySolutionsChannel: null,
+            paymentDetails: {
+              requestedMethod: "free",
+              workshopSessionId: workshopSessionId || null,
+              processingFee: 0,
+              processingVat: 0,
+              freeReason: discountAmount > 0 ? "promo_100_percent" : "free_ticket",
+            },
+          });
+
+          // Settle promo usage
+          if (promoResult.promoCodeId) {
+            await reservePromoUsage(promoResult.promoCodeId, userId, order.id, discountAmount);
+            await settlePromoUsageSuccess(order.id);
+            fastify.log.info(`[CREATE-INTENT] Promo settled for free order ${order.id}`);
+          }
+
+          // Process registration (reuse shared helper)
+          const result = await processSuccessfulPayment(
+            fastify,
+            order.id,
+            `FREE-${order.orderNumber}`,
+            workshopSessionId || null,
+            null,
+            "free",
+            "pay_solutions",
+            "PAID",
+            { freeRegistration: true },
+          );
+
+          const regCode = result?.regCode || "";
+
+          // Send confirmation email
+          if (result) {
+            try {
+              const apiBaseUrl = getPublicApiBaseUrl();
+              const receiptToken = generateReceiptToken(order.id);
+              const receiptDownloadUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
+
+              const items = await db
+                .select({
+                  name: ticketTypes.name,
+                  price: ticketTypes.price,
+                  category: ticketTypes.category,
+                })
+                .from(orderItems)
+                .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+                .where(eq(orderItems.orderId, order.id));
+
+              await sendPaymentReceiptEmail(
+                result.user.email,
+                result.user.firstName,
+                result.user.lastName,
+                order.orderNumber,
+                new Date(),
+                "free",
+                items.map((i) => ({
+                  name: i.name,
+                  type: i.category,
+                  price: Number(i.price),
+                })),
+                subtotalBeforeDiscount,
+                0,
+                0,
+                currency,
+                receiptDownloadUrl,
+                order.needTaxInvoice
+                  ? {
+                      taxName: order.taxName || "",
+                      taxId: order.taxId || "",
+                      taxFullAddress: order.taxFullAddress || "",
+                    }
+                  : undefined,
+                regCode,
+              );
+            } catch (emailErr) {
+              fastify.log.error(emailErr, "[CREATE-INTENT] Failed to send free registration email");
+            }
+          }
+
+          return reply.send({
+            success: true,
+            data: {
+              free: true,
+              redirectForm: null,
+              refno: null,
+              orderId: order.id,
+              orderNumber,
+              regCode,
+              subtotal: subtotalBeforeDiscount,
+              discountAmount,
+              discountType: promoResult.discountType || null,
+              discountValue: promoResult.discountValue || null,
+              netAmount: 0,
+              fee: 0,
+              total: 0,
+              currency,
+              feeMethod: null,
+              paymentChannel: "free",
+            },
+          });
+        }
+
+        // ── PAID FLOW (chargeAmount > 0) ─────────────────────
+
         // Build order detail for Pay Solutions redirect
         const ticketIds = [
           ...(primaryTicket ? [primaryTicket.id] : []),
@@ -1356,6 +1554,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           .select({
             email: users.email,
             phone: users.phone,
+            firstName: users.firstName,
+            lastName: users.lastName,
           })
           .from(users)
           .where(eq(users.id, userId))
@@ -1371,6 +1571,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           requestedLocale.startsWith("th") || referer.includes("/th/") ? "TH" : "EN";
 
         const secureOrderDetail = descLines.join(" | ").slice(0, 255);
+        const customerFullName = `${buyer.firstName || ""} ${buyer.lastName || ""}`.trim();
 
         let formSubmitPayload: ReturnType<typeof createFormSubmitPayload> | null = null;
 
@@ -1380,13 +1581,14 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             orderDetail: secureOrderDetail,
             refNo: paySolutionsRefno,
             userEmail: buyer.email,
+            customerName: customerFullName || undefined,
             channel: paySolutionsChannel,
             currency,
             lang: paySolutionsLang,
           });
 
           fastify.log.info(
-            `[CREATE-INTENT] flow=form_submit actionUrl=${formSubmitPayload.actionUrl}, channel=${paySolutionsChannel}, amount=${chargeAmount}, refno=${paySolutionsRefno}`
+            `[CREATE-INTENT] flow=form_submit actionUrl=${formSubmitPayload.actionUrl}, channel=${paySolutionsChannel}, amount=${chargeAmount}, refno=${paySolutionsRefno}, customerName="${customerFullName}", fields=${JSON.stringify(Object.keys(formSubmitPayload.fields))}`
           );
         } catch (formSubmitErr) {
           await db
@@ -1431,6 +1633,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         return reply.send({
           success: true,
           data: {
+            free: false,
             redirectForm: formSubmitPayload,
             refno: paySolutionsRefno,
             orderId: order.id,
