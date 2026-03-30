@@ -106,42 +106,61 @@ const subfolderCache: Record<string, string> = {};
  * Get or create a subfolder inside a parent folder
  * Returns the subfolder ID
  */
+// In-flight promise cache to prevent duplicate folder creation under concurrent requests
+const folderCreationPromises: Record<string, Promise<string>> = {};
+
 async function getOrCreateFolder(parentFolderId: string, folderName: string): Promise<string> {
   const cacheKey = `${parentFolderId}/${folderName}`;
 
-  // Check cache first
+  // Check resolved cache first
   if (subfolderCache[cacheKey]) {
     return subfolderCache[cacheKey];
   }
 
-  const drive = getDriveClient();
-
-  // Search for existing folder
-  const searchResponse = await drive.files.list({
-    q: `name='${folderName}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
-    fields: "files(id, name)",
-    spaces: "drive",
-  });
-
-  if (searchResponse.data.files && searchResponse.data.files.length > 0) {
-    const folderId = searchResponse.data.files[0].id!;
-    subfolderCache[cacheKey] = folderId;
-    return folderId;
+  // If another request is already creating this folder, reuse that promise
+  if (Object.prototype.hasOwnProperty.call(folderCreationPromises, cacheKey)) {
+    return folderCreationPromises[cacheKey];
   }
 
-  // Create new folder if not exists
-  const createResponse = await drive.files.create({
-    requestBody: {
-      name: folderName,
-      mimeType: "application/vnd.google-apps.folder",
-      parents: [parentFolderId],
-    },
-    fields: "id",
+  const drive = getDriveClient();
+
+  const promise = (async () => {
+    // Search for existing folder
+    const searchResponse = await drive.files.list({
+      q: `name='${folderName}' and '${parentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      fields: "files(id, name)",
+      spaces: "drive",
+    });
+
+    if (searchResponse.data.files && searchResponse.data.files.length > 0) {
+      const folderId = searchResponse.data.files[0].id!;
+      subfolderCache[cacheKey] = folderId;
+      return folderId;
+    }
+
+    // Create new folder if not exists
+    const createResponse = await drive.files.create({
+      requestBody: {
+        name: folderName,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [parentFolderId],
+      },
+      fields: "id",
+    });
+
+    const newFolderId = createResponse.data.id!;
+    subfolderCache[cacheKey] = newFolderId;
+    return newFolderId;
+  })();
+
+  folderCreationPromises[cacheKey] = promise;
+
+  // Clean up in-flight cache once resolved (keep resolved result in subfolderCache)
+  promise.finally(() => {
+    delete folderCreationPromises[cacheKey];
   });
 
-  const newFolderId = createResponse.data.id!;
-  subfolderCache[cacheKey] = newFolderId;
-  return newFolderId;
+  return promise;
 }
 
 /**
@@ -229,18 +248,13 @@ export async function uploadToGoogleDrive(
   });
 
   // Return appropriate URL based on file type
-  // For images: use thumbnail URL (reliable for <img> tags)
-  // For videos: use webViewLink or direct play link
-  // For PDFs/documents: use the actual file view link
+  const apiBase = (process.env.API_BASE_URL || "http://localhost:3002").replace(/\/$/, "");
   const isImage = mimeType.startsWith("image/");
   const isVideo = mimeType.startsWith("video/");
 
-  if (isImage) {
-    // sz=w1000 requests a large thumbnail (width 1000px)
-    return `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`;
-  } else if (isVideo) {
-    // Return direct webContentLink if possible, otherwise embed link
-    return response.data.webViewLink?.replace('/view', '/preview') || `https://drive.google.com/file/d/${fileId}/preview`;
+  if (isImage || isVideo) {
+    // Proxy through our API to avoid Google Drive hotlink restrictions
+    return `${apiBase}/api/files/${fileId}`;
   } else {
     // For PDFs and other documents, return the view link
     return `https://drive.google.com/file/d/${fileId}/view`;
@@ -259,6 +273,138 @@ export function getCategoryFolderName(category: AbstractCategory): string {
  */
 export function getPresentationTypeFolderName(presentationType: PresentationType): string {
   return PRESENTATION_TYPE_FOLDER_NAMES[presentationType] || presentationType;
+}
+
+// ============================================================================
+// EVENT MEDIA UPLOAD (per-event folder structure)
+// ============================================================================
+
+/**
+ * Media type for event uploads — determines subfolder and file naming convention
+ */
+export type EventMediaType = "thumbnail" | "cover_img" | "cover_vdo" | "venue" | "document";
+
+/**
+ * Upload event media to Google Drive with per-event folder structure.
+ *
+ * Folder structure:
+ *   GOOGLE_DRIVE_EVENT_ROOT_FOLDER/
+ *     └─ {eventCode}/
+ *         ├─ img/      ← thumbnail, cover_img, venue images
+ *         └─ vdo/      ← cover_vdo
+ *
+ * File naming convention:
+ *   thumbnail.{eventCode}.{ext}
+ *   cover_img_{eventCode}.{ext}
+ *   cover_vdo_{eventCode}.{ext}
+ *   venue_{sortOrder}_{eventCode}.{ext}
+ *   doc_{originalName}
+ */
+export async function uploadEventMedia(
+  fileBuffer: Buffer,
+  originalFileName: string,
+  mimeType: string,
+  eventCode: string,
+  eventName: string,
+  mediaType: EventMediaType,
+  sortOrder?: number,
+): Promise<string> {
+  const drive = getDriveClient();
+
+  // 1. Get root folder from ENV
+  const rootFolderId = process.env.GOOGLE_DRIVE_EVENT_ROOT_FOLDER;
+  if (!rootFolderId) {
+    throw new Error("GOOGLE_DRIVE_EVENT_ROOT_FOLDER environment variable not set");
+  }
+
+  // 2. Get or create event folder: root/{eventCode}
+  const eventFolderId = await getOrCreateFolder(rootFolderId, eventCode);
+
+  // 3. Get or create single media subfolder: root/{eventCode}/img&vdo
+  const mediaFolderId = await getOrCreateFolder(eventFolderId, "img&vdo");
+
+  // 4. Build file name based on convention (use eventCode for file names)
+  const ext = getFileExtension(originalFileName);
+  const safeName = sanitizeFileName(eventCode);
+  let fileName: string;
+
+  switch (mediaType) {
+    case "thumbnail":
+      fileName = `thumbnail.${safeName}${ext}`;
+      break;
+    case "cover_img":
+      fileName = `cover_img_${safeName}${ext}`;
+      break;
+    case "cover_vdo":
+      fileName = `cover_vdo_${safeName}${ext}`;
+      break;
+    case "venue":
+      fileName = `venue_${sortOrder ?? 0}_${safeName}${ext}`;
+      break;
+    case "document":
+      fileName = `doc_${originalFileName}`;
+      break;
+    default:
+      fileName = `${Date.now()}_${originalFileName}`;
+  }
+
+  // 5. Upload file to Drive
+  const response = await drive.files.create({
+    requestBody: {
+      name: fileName,
+      parents: [mediaFolderId],
+    },
+    media: {
+      mimeType,
+      body: Readable.from(fileBuffer),
+    },
+    fields: "id, webViewLink",
+  });
+
+  const fileId = response.data.id;
+  if (!fileId) {
+    throw new Error("Failed to upload file to Google Drive");
+  }
+
+  // 6. Set permission to "anyone with link can view"
+  await drive.permissions.create({
+    fileId,
+    requestBody: {
+      role: "reader",
+      type: "anyone",
+    },
+  });
+
+  // 7. Return appropriate URL based on file type
+  const apiBase = (process.env.API_BASE_URL || "http://localhost:3002").replace(/\/$/, "");
+  const isImage = mimeType.startsWith("image/");
+  const isVid = mimeType.startsWith("video/");
+
+  if (isImage || isVid) {
+    // Proxy through our API to avoid Google Drive hotlink restrictions
+    return `${apiBase}/api/files/${fileId}`;
+  } else {
+    return `https://drive.google.com/file/d/${fileId}/view`;
+  }
+}
+
+/**
+ * Sanitize event name for use in file names
+ */
+function sanitizeFileName(name: string): string {
+  return name
+    .replace(/[^a-zA-Z0-9\u0E00-\u0E7F._-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .substring(0, 100);
+}
+
+/**
+ * Extract file extension including the dot
+ */
+function getFileExtension(filename: string): string {
+  const lastDot = filename.lastIndexOf('.');
+  return lastDot >= 0 ? filename.substring(lastDot) : '';
 }
 
 /**
@@ -282,6 +428,35 @@ export function extractFileIdFromUrl(url: string): string | null {
   if (idMatch) return idMatch[1];
 
   return null;
+}
+
+/**
+ * List image files in a Google Drive folder
+ * Returns array of { id, name, mimeType }
+ */
+export async function listFolderFiles(
+  folderId: string,
+  options?: { imagesOnly?: boolean; pageSize?: number }
+): Promise<{ id: string; name: string; mimeType: string }[]> {
+  const drive = getDriveClient();
+  const imagesOnly = options?.imagesOnly ?? true;
+  const pageSize = options?.pageSize ?? 100;
+
+  const mimeFilter = imagesOnly ? " and mimeType contains 'image/'" : " and trashed=false";
+  const q = `'${folderId}' in parents${mimeFilter} and trashed=false`;
+
+  const response = await drive.files.list({
+    q,
+    fields: "files(id, name, mimeType)",
+    orderBy: "createdTime",
+    pageSize,
+  });
+
+  return (response.data.files || []).map((f) => ({
+    id: f.id!,
+    name: f.name!,
+    mimeType: f.mimeType!,
+  }));
 }
 
 /**

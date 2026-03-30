@@ -91,7 +91,7 @@ export default async function (fastify: FastifyInstance) {
           gt(ssoTokens.expiresAt, new Date()),
         )
       )
-      .returning({ userId: ssoTokens.userId });
+      .returning({ userId: ssoTokens.userId, sourceApp: ssoTokens.sourceApp });
 
     if (claimedRows.length === 0) {
       return reply.status(401).send({
@@ -100,7 +100,7 @@ export default async function (fastify: FastifyInstance) {
       });
     }
 
-    const { userId } = claimedRows[0];
+    const { userId, sourceApp } = claimedRows[0];
 
     // Get user data + ★ check account status
     const [user] = await db
@@ -113,6 +113,9 @@ export default async function (fastify: FastifyInstance) {
         lastName: users.lastName,
         country: users.country,
         phone: users.phone,
+        institution: users.institution,
+        university: users.university,
+        thaiIdCard: users.thaiIdCard,
         pharmacyLicenseId: users.pharmacyLicenseId,
       })
       .from(users)
@@ -172,6 +175,7 @@ export default async function (fastify: FastifyInstance) {
     return {
       success: true,
       token: jwt,
+      sourceApp: sourceApp || null,
       user: {
         id: user.id,
         email: user.email,
@@ -182,6 +186,9 @@ export default async function (fastify: FastifyInstance) {
         delegateType,
         isThai,
         phone: user.phone,
+        institution: user.institution,
+        university: user.university,
+        idCard: user.thaiIdCard,
         pharmacyLicenseId: user.pharmacyLicenseId,
         name: `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email,
       },

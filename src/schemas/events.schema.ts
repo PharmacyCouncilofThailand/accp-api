@@ -10,14 +10,15 @@ export const createEventSchema = z.object({
     category: z.string().max(100).optional(),
     startDate: z.string().datetime(),
     endDate: z.string().datetime(),
-    maxCapacity: z.number().int().positive().default(100),
+    maxCapacity: z.number().int().min(0).default(0),
     conferenceCode: z.string().max(100).optional(),
     cpeCredits: z.preprocess((val) => val === "" ? undefined : Number(val), z.number().min(0).optional()),
     status: z.enum(["draft", "published", "cancelled", "completed"]).default("draft"),
-    imageUrl: z.preprocess((val) => val === "" ? undefined : val, z.string().max(500).optional()),
-    coverImage: z.preprocess((val) => val === "" ? undefined : val, z.string().max(500).optional()),
+    imageUrl: z.preprocess((val) => val === "" ? null : val, z.string().max(500).optional().nullable()),
+    coverImage: z.preprocess((val) => val === "" ? null : val, z.string().max(500).optional().nullable()),
     videoUrl: z.string().max(2000).optional().nullable(),
     mapUrl: z.preprocess((val) => val === "" ? undefined : val, z.string().max(2000).optional()),
+    websiteUrl: z.preprocess((val) => val === "" ? undefined : val, z.string().url().max(500).optional()),
     abstractStartDate: z.string().datetime().optional(),
     abstractEndDate: z.string().datetime().optional(),
     documents: z.array(z.object({
@@ -40,7 +41,7 @@ export const createSessionSchema = z.object({
     startTime: z.string().datetime(),
     endTime: z.string().datetime(),
     speakerIds: z.array(z.number()).optional(), // New way: link to speakers table
-    maxCapacity: z.number().int().positive().default(100),
+    maxCapacity: z.number().int().min(0).default(0),
     agenda: z.array(z.object({
         time: z.string().min(1),
         topic: z.string().min(1),
@@ -81,7 +82,7 @@ export const createTicketTypeSchema = z.object({
         },
         { message: `allowedRoles must be a JSON array of valid roles: ${VALID_TICKET_ROLES.join(", ")}` }
     ),
-    quota: z.number().int().positive(),
+    quota: z.number().int().min(0),
     saleStartDate: z.string().datetime().optional(),
     saleEndDate: z.string().datetime().optional(),
     displayOrder: z.number().int().min(0).optional(),

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import Fastify, { FastifyRequest, FastifyReply, FastifyError } from "fastify";
 import cors from "@fastify/cors";
+import formbody from "@fastify/formbody";
 import multipart from "@fastify/multipart";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
@@ -28,7 +29,7 @@ const fastify = Fastify({ logger: true });
 // ============================================================================
 const corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
-  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001', 'http://localhost:3003', 'http://127.0.0.1:3003'];
+  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001', 'http://localhost:3003', 'http://127.0.0.1:3003', 'http://localhost:3005', 'http://127.0.0.1:3005'];
 
 fastify.register(cors, {
   origin: corsOrigins,
@@ -52,6 +53,7 @@ fastify.register(rateLimit, {
 // ============================================================================
 // Multipart & JWT
 // ============================================================================
+fastify.register(formbody);
 fastify.register(multipart, {
   limits: {
     fileSize: 50 * 1024 * 1024, // 50MB
@@ -164,7 +166,11 @@ import userAbstractsRoutes from "./routes/public/abstracts/user.js";
 import publicWorkshopsRoutes from "./routes/public/workshops.js";
 import publicTicketsRoutes from "./routes/public/tickets.js";
 import publicContactRoutes from "./routes/public/contact.js";
+import fileProxyRoutes from "./routes/public/files.js";
+import driveFolderRoutes from "./routes/public/drive-folder.js";
+import driveImageRoutes from "./routes/public/drive-image.js";
 import paymentRoutes from "./routes/payments/index.js";
+import freeRegistrationRoutes from "./routes/registrations/free.js";
 
 // ============================================================================
 // Public Routes (No Auth Required)
@@ -209,7 +215,11 @@ fastify.register(userAbstractsRoutes, { prefix: "/api/abstracts/user" });
 fastify.register(publicWorkshopsRoutes, { prefix: "/api/workshops" });
 fastify.register(publicTicketsRoutes, { prefix: "/api/tickets" });
 fastify.register(publicContactRoutes, { prefix: "/api/contact" });
+fastify.register(fileProxyRoutes, { prefix: "/api/files" });
+fastify.register(driveFolderRoutes, { prefix: "/api/drive-folder" });
+fastify.register(driveImageRoutes, { prefix: "/api/drive-image" });
 fastify.register(paymentRoutes, { prefix: "/api/payments" });
+fastify.register(freeRegistrationRoutes, { prefix: "/api/registrations" });
 
 // ============================================================================
 // Protected Backoffice Routes (Auth Required)

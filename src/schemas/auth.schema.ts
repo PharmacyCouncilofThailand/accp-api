@@ -13,6 +13,7 @@ export const registerBodySchema = z.object({
     "generalPublic",
   ]),
   organization: z.string().optional(),
+  university: z.string().optional(),
   idCard: z.string().length(13, "Thai ID Card must be 13 digits").optional(),
   passportId: z.string().min(1, "Passport ID is required for international users").optional(),
   pharmacyLicenseId: z.string().optional(),
@@ -21,8 +22,15 @@ export const registerBodySchema = z.object({
   verificationDocUrl: z.string().optional(),
   recaptchaToken: z.string().optional(),
   source: z.string().optional(),
+  eventCode: z.string().optional(),
 }).refine(data => {
-  if (data.accountType === "thaiProfessional" && !data.pharmacyLicenseId) return false;
+  if (
+    data.accountType === "thaiProfessional" &&
+    !data.pharmacyLicenseId &&
+    data.source !== "newpharmacist"
+  ) {
+    return false;
+  }
   return true;
 }, {
   message: "Pharmacy License ID is required for Thai Professionals",

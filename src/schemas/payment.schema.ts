@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const createPaymentIntentSchema = z.object({
+  eventId: z.coerce.number().int().positive(),
   packageId: z.string().optional().default(""),
   addOnIds: z.array(z.string()).optional().default([]),
   currency: z.enum(["THB", "USD"]),

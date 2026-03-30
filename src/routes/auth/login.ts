@@ -3,7 +3,7 @@ import { db } from "../../database/index.js";
 import { users } from "../../database/schema.js";
 import { loginBodySchema } from "../../schemas/auth.schema.js";
 import bcrypt from "bcryptjs";
-import { eq, or } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { verifyRecaptcha, isRecaptchaEnabled } from "../../utils/recaptcha.js";
 import { JWT_EXPIRY } from "../../constants/auth.js";
 
@@ -134,6 +134,11 @@ export default async function (fastify: FastifyInstance) {
           delegateType,
           isThai: isThai,
           idCard: user.thaiIdCard,
+          phone: user.phone,
+          institution: user.institution,
+          university: user.university,
+          pharmacyLicenseId: user.pharmacyLicenseId,
+          name: `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email,
         },
       });
 

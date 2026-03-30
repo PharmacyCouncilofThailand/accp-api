@@ -296,6 +296,7 @@ export default async function (fastify: FastifyInstance) {
           coverImage: data.coverImage,
           videoUrl: data.videoUrl,
           mapUrl: data.mapUrl,
+          websiteUrl: data.websiteUrl,
           abstractStartDate: data.abstractStartDate
             ? new Date(new Date(data.abstractStartDate).setHours(0, 0, 0, 0))
             : null,

@@ -1,6 +1,14 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
-import { events, eventImages, sessions, ticketTypes, ticketSessions, registrations } from "../../database/schema.js";
+import {
+  events,
+  eventImages,
+  sessions,
+  ticketTypes,
+  ticketSessions,
+  registrations,
+  users,
+} from "../../database/schema.js";
 import { eq, desc, min, asc, sql, and, inArray } from "drizzle-orm";
 
 export default async function publicEventsRoutes(fastify: FastifyInstance) {
@@ -57,6 +65,75 @@ export default async function publicEventsRoutes(fastify: FastifyInstance) {
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: "Failed to fetch events" });
+    }
+  });
+
+  // Get single event by ID or code (public)
+  fastify.get("/:id/university-stats", async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    try {
+      const isNumeric = /^\d+$/.test(id);
+
+      const [event] = await db
+        .select({
+          id: events.id,
+          eventCode: events.eventCode,
+          eventName: events.eventName,
+          status: events.status,
+        })
+        .from(events)
+        .where(isNumeric ? eq(events.id, parseInt(id, 10)) : eq(events.eventCode, id))
+        .limit(1);
+
+      if (!event || event.status !== "published") {
+        return reply.status(404).send({ error: "Event not found" });
+      }
+
+      const universityRows = await db
+        .select({
+          university: users.university,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(registrations)
+        .innerJoin(users, eq(registrations.userId, users.id))
+        .where(
+          and(
+            eq(registrations.eventId, event.id),
+            eq(registrations.status, "confirmed"),
+            sql`${users.university} IS NOT NULL`,
+            sql`trim(${users.university}) <> ''`
+          )
+        )
+        .groupBy(users.university)
+        .orderBy(desc(sql<number>`count(*)::int`), asc(users.university));
+
+      const [summary] = await db
+        .select({
+          totalRegistrants: sql<number>`count(*)::int`,
+        })
+        .from(registrations)
+        .where(
+          and(
+            eq(registrations.eventId, event.id),
+            eq(registrations.status, "confirmed")
+          )
+        );
+
+      return reply.send({
+        eventId: event.id,
+        eventCode: event.eventCode,
+        eventName: event.eventName,
+        totalRegistrants: summary?.totalRegistrants || 0,
+        totalUniversities: universityRows.length,
+        universities: universityRows.map((row) => ({
+          name: row.university,
+          count: row.count,
+        })),
+      });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ error: "Failed to fetch university stats" });
     }
   });
 

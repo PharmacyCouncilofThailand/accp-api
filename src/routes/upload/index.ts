@@ -1,5 +1,5 @@
 import { FastifyInstance, FastifyRequest } from "fastify";
-import { uploadToGoogleDrive, UploadFolderType, getFileStream, extractFileIdFromUrl } from "../../services/googleDrive.js";
+import { uploadToGoogleDrive, UploadFolderType, getFileStream, extractFileIdFromUrl, uploadEventMedia, EventMediaType } from "../../services/googleDrive.js";
 import fs from "fs/promises";
 import path from "path";
 
@@ -216,6 +216,121 @@ export async function uploadRoutes(fastify: FastifyInstance) {
       return reply.status(500).send({
         success: false,
         error: "Failed to upload event document",
+      });
+    }
+  });
+
+  /**
+   * POST /upload/event-media
+   * Upload event media (thumbnail, cover image, cover video, venue image, document)
+   * to per-event Google Drive folder structure.
+   *
+   * Multipart form fields:
+   *   - file: the file to upload
+   *   - eventCode: event code (used as folder name)
+   *   - eventName: event name (used in file naming)
+   *   - mediaType: "thumbnail" | "cover_img" | "cover_vdo" | "venue" | "document"
+   *   - sortOrder: (optional) sort order for venue images
+   */
+  fastify.post("/event-media", { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    try {
+      const parts = request.parts();
+      let fileBuffer: Buffer | null = null;
+      let fileName = "";
+      let fileMimeType = "";
+      let eventCode = "";
+      let eventName = "";
+      let mediaType: EventMediaType = "thumbnail";
+      let sortOrder = 0;
+
+      for await (const part of parts) {
+        if (part.type === "file" && part.fieldname === "file") {
+          const chunks: Buffer[] = [];
+          for await (const chunk of part.file) {
+            chunks.push(chunk);
+          }
+          fileBuffer = Buffer.concat(chunks);
+          fileName = part.filename;
+          fileMimeType = part.mimetype;
+        } else if (part.type === "field") {
+          const value = String(part.value ?? "");
+          switch (part.fieldname) {
+            case "eventCode": eventCode = value; break;
+            case "eventName": eventName = value; break;
+            case "mediaType": mediaType = value as EventMediaType; break;
+            case "sortOrder": sortOrder = parseInt(value) || 0; break;
+          }
+        }
+      }
+
+      if (!fileBuffer || !fileName) {
+        return reply.status(400).send({ success: false, error: "No file uploaded" });
+      }
+
+      if (!eventCode) {
+        return reply.status(400).send({ success: false, error: "eventCode is required" });
+      }
+
+      if (!eventName) {
+        return reply.status(400).send({ success: false, error: "eventName is required" });
+      }
+
+      const validMediaTypes: EventMediaType[] = ["thumbnail", "cover_img", "cover_vdo", "venue", "document"];
+      if (!validMediaTypes.includes(mediaType)) {
+        return reply.status(400).send({ success: false, error: `Invalid mediaType. Must be one of: ${validMediaTypes.join(", ")}` });
+      }
+
+      // Validate file type
+      if (!ALLOWED_MIME_TYPES.includes(fileMimeType)) {
+        return reply.status(400).send({
+          success: false,
+          error: "Invalid file type. Only PDF, DOC/X, XLS/X, JPG, PNG, WEBP, MP4, and WEBM are allowed.",
+        });
+      }
+
+      // Validate file size
+      if (fileBuffer.length > MAX_FILE_SIZE) {
+        return reply.status(400).send({
+          success: false,
+          error: "File too large. Maximum size is 50MB.",
+        });
+      }
+
+      const url = await uploadEventMedia(
+        fileBuffer,
+        fileName,
+        fileMimeType,
+        eventCode,
+        eventName,
+        mediaType,
+        sortOrder,
+      );
+
+      return reply.send({
+        success: true,
+        url,
+        filename: fileName,
+        mediaType,
+      });
+    } catch (error: any) {
+      fastify.log.error(error);
+
+      // Fallback to local storage if Google Drive is not configured
+      const errorMsg = error.message?.toLowerCase() || "";
+      if (
+        errorMsg.includes("environment variable not set") ||
+        errorMsg.includes("invalid_client") ||
+        errorMsg.includes("invalid_grant")
+      ) {
+        return reply.status(503).send({
+          success: false,
+          error: "Google Drive not configured. Please set GOOGLE_DRIVE_EVENT_ROOT_FOLDER.",
+        });
+      }
+
+      return reply.status(500).send({
+        success: false,
+        error: "Failed to upload event media",
       });
     }
   });

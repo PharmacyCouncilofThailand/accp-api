@@ -108,6 +108,7 @@ export const users = pgTable("users", {
   phone: varchar("phone", { length: 20 }),
   country: varchar("country", { length: 100 }),
   institution: varchar("institution", { length: 255 }),
+  university: varchar("university", { length: 255 }),
   thaiIdCard: varchar("thai_id_card", { length: 13 }).unique(),
   passportId: varchar("passport_id", { length: 20 }).unique(),
   pharmacyLicenseId: varchar("pharmacy_license_id", { length: 20 }).unique(),
@@ -194,6 +195,7 @@ export const events = pgTable("events", {
   videoUrl: varchar("video_url", { length: 2000 }),
   mapUrl: varchar("map_url", { length: 2000 }),
   websiteUrl: varchar("website_url", { length: 500 }),
+  shortName: varchar("short_name", { length: 100 }),
   abstractStartDate: timestamp("abstract_start_date"),
   abstractEndDate: timestamp("abstract_end_date"),
   documents: jsonb("documents")
@@ -372,6 +374,7 @@ export const orders = pgTable("orders", {
   userId: integer("user_id")
     .notNull()
     .references(() => users.id),
+  eventId: integer("event_id").references(() => events.id),
   orderNumber: varchar("order_number", { length: 50 }).notNull().unique(),
   subtotalAmount: decimal("subtotal_amount", { precision: 10, scale: 2 }),
   discountAmount: decimal("discount_amount", { precision: 10, scale: 2 }).default("0"),

@@ -14,7 +14,7 @@ import {
   passwordResetTokens,
   verificationRejectionHistory,
 } from "../../database/schema.js";
-import { eq, desc, ilike, or, count, and, SQL, inArray } from "drizzle-orm";
+import { eq, desc, ilike, or, count, and, SQL, inArray, exists } from "drizzle-orm";
 import { z } from "zod";
 
 // Query schema for listing members
@@ -24,6 +24,7 @@ const listMembersQuerySchema = z.object({
   search: z.string().optional(),
   role: z.enum(["thstd", "interstd", "thpro", "interpro", "general", "admin"]).optional(),
   status: z.enum(["pending_approval", "active", "rejected"]).optional(),
+  eventId: z.coerce.number().int().positive().optional(),
 });
 
 export default async function (fastify: FastifyInstance) {
@@ -34,7 +35,7 @@ export default async function (fastify: FastifyInstance) {
       return reply.status(400).send({ error: "Invalid query", details: queryResult.error.flatten() });
     }
 
-    const { page, limit, search, role, status } = queryResult.data;
+    const { page, limit, search, role, status, eventId } = queryResult.data;
     const offset = (page - 1) * limit;
 
     try {
@@ -48,6 +49,21 @@ export default async function (fastify: FastifyInstance) {
       // Filter by status
       if (status) {
         conditions.push(eq(users.status, status));
+      }
+
+      // Filter by event (users with confirmed registration in that event)
+      if (eventId) {
+        conditions.push(
+          exists(
+            db.select({ id: registrations.id })
+              .from(registrations)
+              .where(and(
+                eq(registrations.userId, users.id),
+                eq(registrations.eventId, eventId),
+                eq(registrations.status, "confirmed"),
+              ))
+          )
+        );
       }
 
       // Search by name or email
