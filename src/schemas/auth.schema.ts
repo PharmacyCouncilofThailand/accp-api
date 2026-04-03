@@ -23,18 +23,6 @@ export const registerBodySchema = z.object({
   recaptchaToken: z.string().optional(),
   source: z.string().optional(),
   eventCode: z.string().optional(),
-}).refine(data => {
-  if (
-    data.accountType === "thaiProfessional" &&
-    !data.pharmacyLicenseId &&
-    data.source !== "newpharmacist"
-  ) {
-    return false;
-  }
-  return true;
-}, {
-  message: "Pharmacy License ID is required for Thai Professionals",
-  path: ["pharmacyLicenseId"]
 });
 
 export const loginBodySchema = z.object({
