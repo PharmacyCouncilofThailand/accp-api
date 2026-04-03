@@ -7,6 +7,7 @@ export interface CreateFormSubmitParams {
   orderDetail: string;
   refNo: string;
   userEmail: string;
+  customerName?: string;
   channel: PaySolutionsChannel;
   currency: "THB" | "USD";
   lang?: "TH" | "EN";
@@ -92,6 +93,11 @@ export function createFormSubmitPayload(
     lang: normalizePaySolutionsLang(params.lang),
     channel: params.channel,
   };
+
+  // Add customer name if provided (auto-fills Name field on Pay Solutions page)
+  if (params.customerName?.trim()) {
+    fields.customername = params.customerName.trim();
+  }
 
   return {
     actionUrl: getPaySolutionsFormActionUrl(),

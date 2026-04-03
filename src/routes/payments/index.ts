@@ -30,6 +30,19 @@ import {
   verifyPaySolutionsPostback,
 } from "../../services/paySolutions.js";
 import {
+  createKtbFormPayload,
+  generateKtbOrderRef,
+  isKtbFastpayConfigured,
+  isKtbPaymentCancelled,
+  isKtbPaymentFailed,
+  isKtbPaymentSuccess,
+  mapRequestedPaymentMethodToKtb,
+  normalizeKtbDataFeedPayload,
+  normalizeKtbLang,
+  normalizeKtbPayMethod,
+  verifyKtbDataFeedSecurityKey,
+} from "../../services/ktbFastpay.js";
+import {
   calculatePaySolutionsFeeExact,
   resolvePaySolutionsChannel,
   resolvePaySolutionsFeeMethod,
@@ -78,14 +91,14 @@ async function generatePaySolutionsRefno(): Promise<string> {
     // Ensure sequence exists (safe for new environments / DB resets)
     await db.execute(sql`
       CREATE SEQUENCE IF NOT EXISTS pay_solutions_refno_seq
-      START WITH 100001 INCREMENT BY 1 MINVALUE 100001 NO MAXVALUE CACHE 1
+      START WITH 10001 INCREMENT BY 1 MINVALUE 10001 NO MAXVALUE CACHE 1
     `);
 
-    // Bump sequence to at least 100001 if it was created with a lower start
-    // (prevents collision with any refno <= 100000 used in Pay Solutions panel)
+    // Bump sequence to at least 10001 if it was created with a lower start
+    // (prevents collision with any refno <= 10000 used in Pay Solutions panel)
     await db.execute(sql`
       SELECT setval('pay_solutions_refno_seq',
-        GREATEST(last_value, 100001), true)
+        GREATEST(last_value, 10001), true)
       FROM pay_solutions_refno_seq
     `);
   }
@@ -130,6 +143,72 @@ function getPublicApiBaseUrl(): string {
   }
 
   return normalized;
+}
+
+function getConferenceWebBaseUrl(): string {
+  const raw = (process.env.CONFERENCE_WEB_URL || "http://localhost:3003")
+    .trim()
+    .replace(/^['"]|['"]$/g, "")
+    .replace(/\/$/, "");
+
+  const isLocalHost = (value: string): boolean =>
+    value.includes("localhost") || value.includes("127.0.0.1") || value.includes("0.0.0.0");
+
+  let normalized = /^https?:\/\//i.test(raw)
+    ? raw
+    : `${isLocalHost(raw) ? "http" : "https"}://${raw}`;
+
+  if (normalized.startsWith("http://") && !isLocalHost(normalized)) {
+    normalized = `https://${normalized.slice("http://".length)}`;
+  }
+
+  return normalized;
+}
+
+function toPlainObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function mergeKtbPaymentDetails(
+  existing: unknown,
+  updates: Record<string, unknown>
+): Record<string, unknown> {
+  const base = toPlainObject(existing);
+  const ktb = toPlainObject(base.ktb);
+
+  return {
+    ...base,
+    ktb: {
+      ...ktb,
+      ...updates,
+    },
+  };
+}
+
+function getRequestedKtbLang(request: FastifyRequest): "T" | "E" {
+  const requestedLocale = String(request.headers["accept-language"] || "").toLowerCase();
+  const referer = String(request.headers.referer || "").toLowerCase();
+
+  if (requestedLocale.startsWith("th") || referer.includes("/th/")) {
+    return "T";
+  }
+
+  return normalizeKtbLang(requestedLocale || referer);
+}
+
+function mapGatewayFromPaymentProvider(paymentProvider?: string | null): "ktb" | "pay_solutions" | "stripe" {
+  switch (paymentProvider) {
+    case "ktb_fastpay":
+      return "ktb";
+    case "pay_solutions":
+      return "pay_solutions";
+    default:
+      return "stripe";
+  }
 }
 
 function parsePostbackBody(body: unknown): Record<string, unknown> {
@@ -272,13 +351,16 @@ function buildTaxInvoiceInfo(data: {
 /**
  * Resolve a frontend package/addon string ID + currency to the actual DB ticketType.
  * Frontend uses "student"/"professional" for packages, "workshop"/"gala" for addons.
- * Each ticket in DB has one currency, so we match by groupName/allowedRoles + currency.
+ * Each ticket in DB has one currency, so we match by event + groupName/allowedRoles + currency.
  */
+type ResolvedTicket = { id: number; price: string; eventId: number };
+
 async function resolveTicketId(
   packageId: string,
+  eventId: number,
   currency: string,
   category: "primary" | "addon"
-): Promise<{ id: number; price: string; eventId: number } | null> {
+): Promise<ResolvedTicket | null> {
   // For primary packages, match by allowedRoles pattern
   // For addons, match by groupName
   const allTickets = await db
@@ -294,16 +376,28 @@ async function resolveTicketId(
       eventId: ticketTypes.eventId,
       isActive: ticketTypes.isActive,
       displayOrder: ticketTypes.displayOrder,
+      saleStartDate: ticketTypes.saleStartDate,
+      saleEndDate: ticketTypes.saleEndDate,
     })
     .from(ticketTypes)
     .where(
       and(
+        eq(ticketTypes.eventId, eventId),
         eq(ticketTypes.currency, currency),
         eq(ticketTypes.category, category)
       )
     );
 
-  const active = allTickets.filter((t) => t.isActive !== false);
+  const now = new Date();
+  const active = allTickets.filter((t) => {
+    if (t.isActive === false) return false;
+    // Filter out tickets not within their sale period
+    const saleStart = t.saleStartDate ? new Date(t.saleStartDate) : null;
+    const saleEnd = t.saleEndDate ? new Date(t.saleEndDate) : null;
+    if (saleStart && now < saleStart) return false;
+    if (saleEnd && now > saleEnd) return false;
+    return true;
+  });
 
   if (category === "primary") {
     // Match by role pattern in allowedRoles
@@ -336,6 +430,180 @@ async function resolveTicketId(
   }
 }
 
+interface PurchaseSnapshot {
+  hasPrimaryTicket: boolean;
+  primaryTicketName: string | null;
+  regCode: string | null;
+  purchasedAddOns: string[];
+}
+
+function parsePositiveEventId(value: unknown): number | null {
+  const parsed = typeof value === "number" ? value : parseInt(String(value ?? ""), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+async function getPaidPurchaseSnapshot(userId: number, eventId?: number): Promise<PurchaseSnapshot> {
+  const orderConditions = [eq(orders.userId, userId), eq(orders.status, "paid")];
+  if (typeof eventId === "number") {
+    orderConditions.push(eq(orders.eventId, eventId));
+  }
+
+  const paidOrders = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(and(...orderConditions));
+
+  // Check registrations table first (covers manual backoffice registrations without orders)
+  const registrationConditions = [
+    eq(registrations.userId, userId),
+    eq(registrations.status, "confirmed"),
+  ];
+  if (typeof eventId === "number") {
+    registrationConditions.push(eq(registrations.eventId, eventId));
+  }
+
+  const [registration] = await db
+    .select({ regCode: registrations.regCode })
+    .from(registrations)
+    .where(and(...registrationConditions))
+    .orderBy(desc(registrations.id))
+    .limit(1);
+
+  if (paidOrders.length === 0) {
+    // No paid orders — but if a confirmed registration exists (e.g. manual/backoffice),
+    // treat as having a primary ticket so the user can buy add-ons
+    return {
+      hasPrimaryTicket: !!registration,
+      primaryTicketName: null,
+      regCode: registration?.regCode || null,
+      purchasedAddOns: [],
+    };
+  }
+
+  const paidOrderIds = paidOrders.map((order) => order.id);
+  const allItems = await db
+    .select({
+      ticketName: ticketTypes.name,
+      groupName: ticketTypes.groupName,
+      category: ticketTypes.category,
+    })
+    .from(orderItems)
+    .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+    .where(inArray(orderItems.orderId, paidOrderIds));
+
+  let hasPrimaryTicket = allItems.some((item) => item.category === "primary");
+  const primaryItem = allItems.find((item) => item.category === "primary");
+
+  const purchasedAddOns = [
+    ...new Set(
+      allItems
+        .filter((item) => item.category === "addon" && item.groupName)
+        .map((item) => item.groupName!.toLowerCase())
+    ),
+  ];
+
+  const regCode = registration?.regCode || null;
+
+  // If no paid primary ticket found but a confirmed registration exists,
+  // treat as having a primary ticket so the user can buy add-ons
+  if (!hasPrimaryTicket && registration) {
+    hasPrimaryTicket = true;
+  }
+
+  return {
+    hasPrimaryTicket,
+    primaryTicketName: primaryItem?.ticketName || null,
+    regCode,
+    purchasedAddOns,
+  };
+}
+
+async function findConfirmedRegistrationForEvent(
+  tx: any,
+  userId: number,
+  eventId: number,
+  logger?: { warn?: (...args: any[]) => void }
+) {
+  const existingRegistrations = await tx
+    .select({
+      id: registrations.id,
+      regCode: registrations.regCode,
+      eventId: registrations.eventId,
+    })
+    .from(registrations)
+    .where(
+      and(
+        eq(registrations.userId, userId),
+        eq(registrations.eventId, eventId),
+        eq(registrations.status, "confirmed")
+      )
+    )
+    .orderBy(desc(registrations.id))
+    .limit(2);
+
+  if (existingRegistrations.length > 1) {
+    logger?.warn?.(
+      `[PAYMENTS] Multiple confirmed registrations found for user=${userId}, event=${eventId}; using latest registrationId=${existingRegistrations[0].id}`
+    );
+  }
+
+  return existingRegistrations[0] || null;
+}
+
+async function resolveOrderEventId(tx: any, order: { id: number; eventId: number | null }) {
+  if (order.eventId) {
+    return order.eventId;
+  }
+
+  const [primaryTicket] = await tx
+    .select({ eventId: ticketTypes.eventId })
+    .from(orderItems)
+    .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+    .where(and(eq(orderItems.orderId, order.id), eq(orderItems.itemType, "ticket")))
+    .limit(1);
+
+  if (primaryTicket?.eventId) {
+    return primaryTicket.eventId;
+  }
+
+  const [registrationEvent] = await tx
+    .select({ eventId: registrations.eventId })
+    .from(registrations)
+    .where(eq(registrations.orderId, order.id))
+    .orderBy(desc(registrations.id))
+    .limit(1);
+
+  if (registrationEvent?.eventId) {
+    return registrationEvent.eventId;
+  }
+
+  const legacyOrderEvents = await tx
+    .select({ eventId: ticketTypes.eventId })
+    .from(orderItems)
+    .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+    .where(eq(orderItems.orderId, order.id))
+    .groupBy(ticketTypes.eventId)
+    .limit(2);
+
+  return legacyOrderEvents.length === 1 ? legacyOrderEvents[0].eventId : null;
+}
+
+async function countConfirmedWorkshopEnrollments(eventId: number, sessionId: number) {
+  const [row] = await db
+    .select({ count: count() })
+    .from(registrationSessions)
+    .innerJoin(registrations, eq(registrationSessions.registrationId, registrations.id))
+    .where(
+      and(
+        eq(registrationSessions.sessionId, sessionId),
+        eq(registrations.eventId, eventId),
+        eq(registrations.status, "confirmed")
+      )
+    );
+
+  return row?.count ?? 0;
+}
+
 // ─────────────────────────────────────────────────────
 // Shared: process a successful payment
 // ─────────────────────────────────────────────────────
@@ -346,13 +614,19 @@ async function resolveTicketId(
  * Returns { order, user } for email sending, or null if order not found.
  */
 async function processSuccessfulPayment(
-  fastify: { log: { info: (...args: any[]) => void; error: (...args: any[]) => void } },
+  fastify: {
+    log: {
+      info: (...args: any[]) => void;
+      error: (...args: any[]) => void;
+      warn?: (...args: any[]) => void;
+    };
+  },
   orderId: number,
   providerRef: string,
   workshopSessionId: number | null,
   receiptUrl: string | null,
   paymentChannel: string,
-  paymentProvider: "stripe" | "pay_solutions" = "stripe",
+  paymentProvider: "stripe" | "pay_solutions" | "ktb_fastpay" = "stripe",
   providerStatus: string = "PAID",
   paymentDetails: Record<string, unknown> | null = null,
 ): Promise<{
@@ -452,35 +726,43 @@ async function processSuccessfulPayment(
       return { order: { ...order, status: "paid" as string }, user, regCode: existingReg?.regCode || "" };
     }
 
-    // Find primary (ticket) item to get eventId
+    const orderEventId = await resolveOrderEventId(tx, order);
+    if (!orderEventId) {
+      fastify.log.error(`Unable to resolve event scope for order ${orderId}`);
+      return null;
+    }
+
+    if (!order.eventId) {
+      fastify.log.warn?.(
+        `Order ${orderId} is missing eventId; using derived eventId=${orderEventId} for legacy compatibility`
+      );
+    }
+
+    // Find primary (ticket) item to determine whether this is a full order or addon-only order
     const primaryItem = items.find(i => i.itemType === "ticket");
     const isAddonOnlyOrder = !primaryItem;
 
     let registration: { id: number };
     let regCode: string;
-    let eventId: number = 1;
 
     if (isAddonOnlyOrder) {
       // ── Addon-only order: use existing registration ────
-      const [existingReg] = await tx
-        .select({ id: registrations.id, regCode: registrations.regCode, eventId: registrations.eventId })
-        .from(registrations)
-        .where(
-          and(
-            eq(registrations.userId, order.userId),
-            eq(registrations.status, "confirmed")
-          )
-        )
-        .limit(1);
+      const existingReg = await findConfirmedRegistrationForEvent(
+        tx,
+        order.userId,
+        orderEventId,
+        fastify.log
+      );
 
       if (!existingReg) {
-        fastify.log.error(`Addon-only order ${orderId} but no existing registration for user ${order.userId}`);
+        fastify.log.error(
+          `Addon-only order ${orderId} but no confirmed registration exists for user ${order.userId} in event ${orderEventId}`
+        );
         return null;
       }
 
       registration = { id: existingReg.id };
       regCode = existingReg.regCode;
-      eventId = existingReg.eventId;
       fastify.log.info(`Addon-only order ${orderId}: using existing registration ${existingReg.id}`);
     } else {
       // ── Full order: create new registration ────────────
@@ -490,12 +772,18 @@ async function processSuccessfulPayment(
         .where(eq(ticketTypes.id, primaryItem.ticketTypeId))
         .limit(1);
 
-      eventId = primaryTicket?.eventId || 1;
+      if (!primaryTicket?.eventId || primaryTicket.eventId !== orderEventId) {
+        fastify.log.error(
+          `Primary ticket event mismatch for order ${orderId}: orderEventId=${orderEventId}, ticketEventId=${primaryTicket?.eventId ?? "null"}`
+        );
+        return null;
+      }
+
       regCode = generateRegCode();
       const [newReg] = await tx.insert(registrations).values({
         regCode,
         orderId,
-        eventId,
+        eventId: orderEventId,
         ticketTypeId: primaryItem.ticketTypeId,
         userId: order.userId,
         email: user.email,
@@ -511,10 +799,17 @@ async function processSuccessfulPayment(
     let totalSessionLinks = 0;
     for (const item of items) {
       const [ticket] = await tx
-        .select({ groupName: ticketTypes.groupName })
+        .select({ groupName: ticketTypes.groupName, eventId: ticketTypes.eventId })
         .from(ticketTypes)
         .where(eq(ticketTypes.id, item.ticketTypeId))
         .limit(1);
+
+      if (!ticket || ticket.eventId !== orderEventId) {
+        fastify.log.error(
+          `Ticket ${item.ticketTypeId} is outside order event scope for order ${orderId}: orderEventId=${orderEventId}, ticketEventId=${ticket?.eventId ?? "null"}`
+        );
+        return null;
+      }
 
       // Determine which session(s) to link
       let sessionIdsToLink: number[] = [];
@@ -525,13 +820,32 @@ async function processSuccessfulPayment(
         workshopSessionId
       ) {
         // Workshop addon → user chose a specific session
+        const [workshopSession] = await tx
+          .select({ id: sessions.id })
+          .from(sessions)
+          .where(and(eq(sessions.id, workshopSessionId), eq(sessions.eventId, orderEventId)))
+          .limit(1);
+
+        if (!workshopSession) {
+          fastify.log.error(
+            `Workshop session ${workshopSessionId} is outside event ${orderEventId} for order ${orderId}`
+          );
+          return null;
+        }
+
         sessionIdsToLink = [workshopSessionId];
       } else {
         // Primary or other addon → lookup sessions from ticketSessions junction
         const linkedSessions = await tx
           .select({ sessionId: ticketSessions.sessionId })
           .from(ticketSessions)
-          .where(eq(ticketSessions.ticketTypeId, item.ticketTypeId));
+          .innerJoin(sessions, eq(ticketSessions.sessionId, sessions.id))
+          .where(
+            and(
+              eq(ticketSessions.ticketTypeId, item.ticketTypeId),
+              eq(sessions.eventId, orderEventId)
+            )
+          );
 
         sessionIdsToLink = linkedSessions.map(ls => ls.sessionId);
 
@@ -542,7 +856,7 @@ async function processSuccessfulPayment(
             .from(sessions)
             .where(
               and(
-                eq(sessions.eventId, eventId),
+                eq(sessions.eventId, orderEventId),
                 eq(sessions.isMainSession, true)
               )
             );
@@ -592,84 +906,332 @@ async function processSuccessfulPayment(
 
 export default async function paymentRoutes(fastify: FastifyInstance) {
   // ─────────────────────────────────────────────────────
+  // GET /payments/browser-return (NO AUTH — Pay Solutions redirect landing)
+  // Pay Solutions redirects the user's browser here after payment.
+  // We look up the event from refno and HTTP 302 to the correct frontend.
+  // ─────────────────────────────────────────────────────
+  fastify.get(
+    "/browser-return",
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const query = request.query as Record<string, string>;
+      const refno = query.Refno || query.refno || "";
+
+      const CONFERENCE_WEB_URL = (
+        process.env.CONFERENCE_WEB_URL || "http://localhost:3003"
+      ).replace(/\/$/, "");
+
+      const defaultResultUrl = `${CONFERENCE_WEB_URL}/checkout/payment/result`;
+
+      if (!refno) {
+        fastify.log.warn("[BROWSER-RETURN] No refno in query, redirecting to default");
+        return reply.code(302).redirect(`${defaultResultUrl}?refno=`);
+      }
+
+      try {
+        // Find payment → order → event
+        const [payment] = await db
+          .select({ orderId: payments.orderId })
+          .from(payments)
+          .where(eq(payments.paySolutionsRefno, refno))
+          .limit(1);
+
+        if (!payment) {
+          fastify.log.warn(`[BROWSER-RETURN] Payment not found for refno=${refno}, redirecting to default`);
+          return reply.code(302).redirect(`${defaultResultUrl}?refno=${encodeURIComponent(refno)}`);
+        }
+
+        const [order] = await db
+          .select({ eventId: orders.eventId })
+          .from(orders)
+          .where(eq(orders.id, payment.orderId))
+          .limit(1);
+
+        const eventId = order?.eventId ?? null;
+
+        if (!eventId) {
+          fastify.log.warn(
+            `[BROWSER-RETURN] Missing eventId on orderId=${payment.orderId}, redirecting to default`
+          );
+          return reply.code(302).redirect(`${defaultResultUrl}?refno=${encodeURIComponent(refno)}`);
+        }
+
+        // Check if event has a dedicated website URL
+        const [event] = await db
+          .select({
+            websiteUrl: events.websiteUrl,
+          })
+          .from(events)
+          .where(eq(events.id, eventId))
+          .limit(1);
+
+        if (event?.websiteUrl) {
+          const targetUrl = event.websiteUrl.replace(/\/$/, "");
+          fastify.log.info(`[BROWSER-RETURN] Event has websiteUrl, redirecting to ${targetUrl}`);
+          return reply.code(302).redirect(`${targetUrl}/en/checkout/payment/result?refno=${encodeURIComponent(refno)}`);
+        }
+
+        // Default: redirect to conference-web
+        fastify.log.info(`[BROWSER-RETURN] Default redirect to conference-web`);
+        return reply.code(302).redirect(`${defaultResultUrl}?refno=${encodeURIComponent(refno)}`);
+      } catch (error) {
+        fastify.log.error(error, "[BROWSER-RETURN] Error looking up refno");
+        return reply.code(302).redirect(`${defaultResultUrl}?refno=${encodeURIComponent(refno)}`);
+      }
+    }
+  );
+
+  // ─────────────────────────────────────────────────────
   // GET /payments/my-purchases (JWT protected)
   // Returns what the current user has already purchased
   // ─────────────────────────────────────────────────────
+  fastify.post(
+    "/ktb/datafeed",
+    {
+      config: {
+        rateLimit: false,
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const payload = normalizeKtbDataFeedPayload(toPlainObject(request.body));
+
+      reply.type("text/plain").send("OK");
+
+      setImmediate(async () => {
+        try {
+          if (!payload.orderRef) {
+            fastify.log.warn("[KTB-DATAFEED] Missing orderRef");
+            return;
+          }
+
+          const secureHashKey = process.env.KTB_SECURE_HASH_KEY?.trim() || "";
+          if (!secureHashKey) {
+            fastify.log.error(
+              `[KTB-DATAFEED] KTB_SECURE_HASH_KEY is missing; ignoring orderRef=${payload.orderRef}`
+            );
+            return;
+          }
+
+          if (!verifyKtbDataFeedSecurityKey(payload, secureHashKey)) {
+            fastify.log.warn(
+              `[KTB-DATAFEED] Invalid securityKey for orderRef=${payload.orderRef}, successcode=${payload.successcode}`
+            );
+            return;
+          }
+
+          const [payment] = await db
+            .select({
+              id: payments.id,
+              orderId: payments.orderId,
+              status: payments.status,
+              providerRef: payments.providerRef,
+              paymentChannel: payments.paymentChannel,
+              paymentDetails: payments.paymentDetails,
+            })
+            .from(payments)
+            .where(
+              and(
+                eq(payments.paymentProvider, "ktb_fastpay"),
+                eq(payments.providerRef, payload.orderRef)
+              )
+            )
+            .limit(1);
+
+          if (!payment) {
+            fastify.log.warn(`[KTB-DATAFEED] Payment not found for orderRef=${payload.orderRef}`);
+            return;
+          }
+
+          if (payment.status === "paid") {
+            fastify.log.info(`[KTB-DATAFEED] Duplicate callback ignored for paid orderRef=${payload.orderRef}`);
+            return;
+          }
+
+          const resolvedChannel = normalizeKtbPayMethod(payload.payMethod) || payment.paymentChannel || "card";
+          const mergedDetails = mergeKtbPaymentDetails(payment.paymentDetails, {
+            payRef: payload.payRef,
+            ord: payload.ord,
+            authId: payload.authId,
+            eci: payload.eci,
+            payMethod: payload.payMethod,
+            payerAuth: payload.payerAuth,
+            sourceIp: payload.sourceIp,
+            ipCountry: payload.ipCountry,
+            cardNo: payload.cardNo,
+            payTime: payload.payTime,
+            lastDataFeed: payload.raw,
+          });
+
+          if (isKtbPaymentSuccess(payload.successcode)) {
+            const workshopSessionId = parseWorkshopSessionIdFromDetails(payment.paymentDetails);
+            const txResult = await processSuccessfulPayment(
+              fastify,
+              payment.orderId,
+              payment.providerRef || payload.orderRef,
+              workshopSessionId,
+              null,
+              resolvedChannel,
+              "ktb_fastpay",
+              "SUCCESS",
+              mergedDetails,
+            );
+
+            if (txResult) {
+              await settlePromoUsageSuccess(payment.orderId);
+
+              const { order, user, regCode } = txResult;
+              try {
+                const emailItems = await db
+                  .select({
+                    name: ticketTypes.name,
+                    type: orderItems.itemType,
+                    price: orderItems.price,
+                    quantity: orderItems.quantity,
+                  })
+                  .from(orderItems)
+                  .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+                  .where(eq(orderItems.orderId, payment.orderId));
+
+                const sortedEmailItems = sortOrderItemsPrimaryFirst(emailItems);
+                const emailSubtotal = sortedEmailItems.reduce(
+                  (sum, item) => sum + Number(item.price) * item.quantity,
+                  0
+                );
+                const emailDiscount = Number(order.discountAmount || 0);
+                const emailNetAmount = emailSubtotal - emailDiscount;
+                const emailTotal = Number(order.totalAmount);
+                const emailFee = Math.round((emailTotal - emailNetAmount) * 100) / 100;
+                const receiptToken = generateReceiptToken(payment.orderId);
+                const receiptDownloadUrl = `${getPublicApiBaseUrl()}/api/payments/receipt/${receiptToken}`;
+
+                await sendPaymentReceiptEmail(
+                  user.email,
+                  user.firstName,
+                  user.lastName,
+                  order.orderNumber,
+                  new Date(),
+                  resolvedChannel,
+                  sortedEmailItems.map((item) => ({
+                    name: item.name,
+                    type: item.type,
+                    price: Number(item.price),
+                  })),
+                  emailSubtotal,
+                  emailFee,
+                  emailTotal,
+                  order.currency,
+                  receiptDownloadUrl,
+                  order.needTaxInvoice
+                    ? {
+                      taxName: order.taxName,
+                      taxId: order.taxId,
+                      taxFullAddress: order.taxFullAddress,
+                    }
+                    : undefined,
+                  regCode
+                );
+              } catch (emailErr) {
+                fastify.log.error(
+                  `[KTB-DATAFEED] Failed to send receipt email for order ${payment.orderId}: ${emailErr}`
+                );
+              }
+            }
+
+            fastify.log.info(`[KTB-DATAFEED] Marked paid for orderRef=${payload.orderRef}`);
+            return;
+          }
+
+          if (isKtbPaymentFailed(payload.successcode) || isKtbPaymentCancelled(payload.successcode)) {
+            const nextStatus = isKtbPaymentCancelled(payload.successcode) ? "cancelled" : "failed";
+            const nextProviderStatus = isKtbPaymentCancelled(payload.successcode)
+              ? "CANCELLED"
+              : "FAILED";
+
+            await db
+              .update(payments)
+              .set({
+                status: nextStatus,
+                providerStatus: nextProviderStatus,
+                paymentChannel: resolvedChannel,
+                paymentDetails: mergedDetails,
+              })
+              .where(eq(payments.id, payment.id));
+
+            await db
+              .update(orders)
+              .set({ status: "cancelled" })
+              .where(eq(orders.id, payment.orderId));
+
+            await cancelPromoUsage(payment.orderId);
+
+            fastify.log.info(
+              `[KTB-DATAFEED] Marked ${nextStatus} for orderRef=${payload.orderRef}, successcode=${payload.successcode}`
+            );
+            return;
+          }
+
+          await db
+            .update(payments)
+            .set({
+              providerStatus: "UNKNOWN",
+              paymentChannel: resolvedChannel,
+              paymentDetails: mergedDetails,
+            })
+            .where(eq(payments.id, payment.id));
+
+          fastify.log.warn(
+            `[KTB-DATAFEED] Unknown successcode=${payload.successcode} for orderRef=${payload.orderRef}`
+          );
+        } catch (error) {
+          fastify.log.error(error, `[KTB-DATAFEED] Background processing failed for orderRef=${payload.orderRef}`);
+        }
+      });
+
+      return reply;
+    }
+  );
+
+  fastify.get(
+    "/ktb/return",
+    {
+      config: {
+        rateLimit: false,
+      },
+    },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      const query = request.query as Record<string, string | undefined>;
+      const orderRef = query.Ref || query.orderRef || "";
+      const result = query.result || "unknown";
+      const targetUrl = `${getConferenceWebBaseUrl()}/checkout/payment/result?gateway=ktb&orderRef=${encodeURIComponent(orderRef)}&result=${encodeURIComponent(result)}`;
+      return reply.code(302).redirect(targetUrl);
+    }
+  );
+
   fastify.get(
     "/my-purchases",
     { preHandler: [fastify.authenticate] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const userId = request.user.id;
+      const query = request.query as { eventId?: string };
+      const eventId = query.eventId ? parsePositiveEventId(query.eventId) : null;
+
+      if (query.eventId && !eventId) {
+        return reply.status(400).send({
+          success: false,
+          code: "INVALID_EVENT_ID",
+          error: "Event is invalid",
+        });
+      }
 
       try {
-        // Find all paid orders for this user
-        const paidOrders = await db
-          .select({ id: orders.id })
-          .from(orders)
-          .where(and(eq(orders.userId, userId), eq(orders.status, "paid")));
-
-        if (paidOrders.length === 0) {
-          return reply.send({
-            success: true,
-            data: {
-              hasPrimaryTicket: false,
-              primaryTicketName: null,
-              regCode: null,
-              purchasedAddOns: [],
-            },
-          });
-        }
-
-        const paidOrderIds = paidOrders.map((o) => o.id);
-
-        // Get all order items from paid orders
-        const allItems = await db
-          .select({
-            itemType: orderItems.itemType,
-            ticketTypeId: orderItems.ticketTypeId,
-            ticketName: ticketTypes.name,
-            groupName: ticketTypes.groupName,
-            category: ticketTypes.category,
-          })
-          .from(orderItems)
-          .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
-          .where(inArray(orderItems.orderId, paidOrderIds));
-
-        const hasPrimaryTicket = allItems.some((i) => i.category === "primary");
-        const primaryItem = allItems.find((i) => i.category === "primary");
-
-        // Get purchased addon groupNames (deduplicated)
-        const purchasedAddOns = [
-          ...new Set(
-            allItems
-              .filter((i) => i.category === "addon" && i.groupName)
-              .map((i) => i.groupName!.toLowerCase())
-          ),
-        ];
-
-        // Get regCode from registration
-        let regCode: string | null = null;
-        if (hasPrimaryTicket) {
-          const [reg] = await db
-            .select({ regCode: registrations.regCode })
-            .from(registrations)
-            .where(
-              and(
-                eq(registrations.userId, userId),
-                eq(registrations.status, "confirmed")
-              )
-            )
-            .limit(1);
-          regCode = reg?.regCode || null;
-        }
+        const snapshot = await getPaidPurchaseSnapshot(userId, eventId ?? undefined);
 
         return reply.send({
           success: true,
           data: {
-            hasPrimaryTicket,
-            primaryTicketName: primaryItem?.ticketName || null,
-            regCode,
-            purchasedAddOns,
+            hasPrimaryTicket: snapshot.hasPrimaryTicket,
+            primaryTicketName: snapshot.primaryTicketName,
+            regCode: snapshot.regCode,
+            purchasedAddOns: snapshot.purchasedAddOns,
           },
         });
       } catch (error) {
@@ -691,130 +1253,153 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
     { preHandler: [fastify.authenticate] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const userId = request.user.id;
+      const query = request.query as { eventId?: string };
+      const eventId = query.eventId ? parsePositiveEventId(query.eventId) : null;
+
+      if (query.eventId && !eventId) {
+        return reply.status(400).send({
+          success: false,
+          code: "INVALID_EVENT_ID",
+          error: "Event is invalid",
+        });
+      }
 
       try {
-        // Primary confirmed registration (single source of truth for ticket owner)
-        const [primaryRegistration] = await db
+        const registrationConditions: any[] = [
+          eq(registrations.userId, userId),
+          eq(registrations.status, "confirmed"),
+        ];
+
+        if (eventId) {
+          registrationConditions.push(eq(registrations.eventId, eventId));
+        }
+
+        const allRegistrations = await db
           .select({
             registrationId: registrations.id,
             regCode: registrations.regCode,
+            eventId: registrations.eventId,
             status: registrations.status,
             dietaryRequirements: registrations.dietaryRequirements,
             purchasedAt: registrations.createdAt,
+            eventCode: events.eventCode,
+            eventName: events.eventName,
+            eventStartDate: events.startDate,
+            eventEndDate: events.endDate,
+            eventLocation: events.location,
+            eventImageUrl: events.imageUrl,
+            eventWebsiteUrl: events.websiteUrl,
             ticketName: ticketTypes.name,
             ticketPriority: ticketTypes.priority,
             ticketPrice: ticketTypes.price,
             ticketCurrency: ticketTypes.currency,
             ticketFeatures: ticketTypes.features,
+            ticketTypeId: ticketTypes.id,
             orderId: orders.id,
             orderStatus: orders.status,
           })
           .from(registrations)
+          .innerJoin(events, eq(registrations.eventId, events.id))
           .innerJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
           .leftJoin(orders, eq(registrations.orderId, orders.id))
-          .where(
-            and(
-              eq(registrations.userId, userId),
-              eq(registrations.status, "confirmed")
-            )
-          )
-          .orderBy(desc(registrations.createdAt))
-          .limit(1);
+          .where(and(...registrationConditions))
+          .orderBy(desc(registrations.createdAt));
 
-        if (!primaryRegistration) {
-          return reply.send({
-            success: true,
-            data: {
-              registration: null,
-              galaTicket: null,
-              workshops: [],
-            },
-          });
+        if (allRegistrations.length === 0) {
+          return reply.send({ success: true, data: [] });
         }
 
-        const addonRows = await db
-          .select({
-            ticketTypeId: registrationSessions.ticketTypeId,
-            linkedAt: registrationSessions.createdAt,
-            groupName: ticketTypes.groupName,
-            ticketName: ticketTypes.name,
-            ticketPrice: ticketTypes.price,
-            ticketCurrency: ticketTypes.currency,
-            sessionId: sessions.id,
-            sessionName: sessions.sessionName,
-            sessionStartTime: sessions.startTime,
-            sessionEndTime: sessions.endTime,
-            sessionRoom: sessions.room,
-          })
-          .from(registrationSessions)
-          .innerJoin(ticketTypes, eq(registrationSessions.ticketTypeId, ticketTypes.id))
-          .innerJoin(sessions, eq(registrationSessions.sessionId, sessions.id))
-          .where(
-            and(
-              eq(registrationSessions.registrationId, primaryRegistration.registrationId),
-              eq(ticketTypes.category, "addon")
-            )
-          )
-          .orderBy(desc(registrationSessions.createdAt));
+        const apiBaseUrl = getPublicApiBaseUrl();
+        const result = await Promise.all(
+          allRegistrations.map(async (reg) => {
+            const addonRows = await db
+              .select({
+                ticketTypeId: registrationSessions.ticketTypeId,
+                linkedAt: registrationSessions.createdAt,
+                groupName: ticketTypes.groupName,
+                ticketName: ticketTypes.name,
+                ticketPrice: ticketTypes.price,
+                ticketCurrency: ticketTypes.currency,
+                sessionId: sessions.id,
+                sessionName: sessions.sessionName,
+                sessionStartTime: sessions.startTime,
+                sessionEndTime: sessions.endTime,
+                sessionRoom: sessions.room,
+              })
+              .from(registrationSessions)
+              .innerJoin(ticketTypes, eq(registrationSessions.ticketTypeId, ticketTypes.id))
+              .innerJoin(sessions, eq(registrationSessions.sessionId, sessions.id))
+              .where(
+                and(
+                  eq(registrationSessions.registrationId, reg.registrationId),
+                  eq(ticketTypes.category, "addon")
+                )
+              )
+              .orderBy(desc(registrationSessions.createdAt));
 
-        const workshopRows = addonRows.filter(
-          (row) => (row.groupName || "").toLowerCase() === "workshop"
-        );
-        const galaRow = addonRows.find(
-          (row) => (row.groupName || "").toLowerCase() === "gala"
-        );
+            const workshopRows = addonRows.filter(
+              (row) => (row.groupName || "").toLowerCase() === "workshop"
+            );
+            const galaRow = addonRows.find(
+              (row) => (row.groupName || "").toLowerCase() === "gala"
+            );
 
-        let receiptUrl: string | null = null;
-        if (primaryRegistration.orderStatus === "paid" && primaryRegistration.orderId) {
-          const receiptToken = generateReceiptToken(primaryRegistration.orderId);
-          const apiBaseUrl = getPublicApiBaseUrl();
-          receiptUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
-        }
+            let receiptUrl: string | null = null;
+            if (reg.orderStatus === "paid" && reg.orderId) {
+              const receiptToken = generateReceiptToken(reg.orderId);
+              receiptUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
+            }
 
-        return reply.send({
-          success: true,
-          data: {
-            registration: {
-              regCode: primaryRegistration.regCode,
-              status: primaryRegistration.status,
-              ticketName: primaryRegistration.ticketName,
-              priority: primaryRegistration.ticketPriority,
-              purchasedAt: primaryRegistration.purchasedAt?.toISOString() || null,
-              amount: primaryRegistration.ticketPrice,
-              currency: primaryRegistration.ticketCurrency,
-              includes: Array.isArray(primaryRegistration.ticketFeatures)
-                ? primaryRegistration.ticketFeatures
-                : [],
+            return {
+              regCode: reg.regCode,
+              eventId: reg.eventId,
+              eventCode: reg.eventCode,
+              eventName: reg.eventName,
+              eventStartDate: reg.eventStartDate?.toISOString() || null,
+              eventEndDate: reg.eventEndDate?.toISOString() || null,
+              eventLocation: reg.eventLocation,
+              eventImageUrl: reg.eventImageUrl,
+              websiteUrl: reg.eventWebsiteUrl,
+              status: reg.status,
+              ticketName: reg.ticketName,
+              ticketTypeId: reg.ticketTypeId,
+              priority: reg.ticketPriority,
+              purchasedAt: reg.purchasedAt?.toISOString() || null,
+              amount: reg.ticketPrice,
+              currency: reg.ticketCurrency,
+              includes: Array.isArray(reg.ticketFeatures) ? reg.ticketFeatures : [],
               receiptUrl,
-            },
-            galaTicket: galaRow
-              ? {
-                  id: `${primaryRegistration.regCode}-GALA`,
-                  status: primaryRegistration.status,
-                  name: galaRow.ticketName,
-                  purchasedAt: galaRow.linkedAt?.toISOString() || null,
-                  amount: galaRow.ticketPrice,
-                  currency: galaRow.ticketCurrency,
-                  dateTimeStart: galaRow.sessionStartTime?.toISOString() || null,
-                  dateTimeEnd: galaRow.sessionEndTime?.toISOString() || null,
-                  venue: galaRow.sessionRoom,
-                  dietary: primaryRegistration.dietaryRequirements || null,
-                }
-              : null,
-            workshops: workshopRows.map((row) => ({
-              id: `${primaryRegistration.regCode}-WS-${row.sessionId}`,
-              sessionId: row.sessionId,
-              status: primaryRegistration.status,
-              name: row.sessionName || row.ticketName,
-              purchasedAt: row.linkedAt?.toISOString() || null,
-              amount: row.ticketPrice,
-              currency: row.ticketCurrency,
-              dateTimeStart: row.sessionStartTime?.toISOString() || null,
-              dateTimeEnd: row.sessionEndTime?.toISOString() || null,
-              venue: row.sessionRoom,
-            })),
-          },
-        });
+              galaTicket: galaRow
+                ? {
+                    id: `${reg.regCode}-GALA`,
+                    status: reg.status,
+                    name: galaRow.ticketName,
+                    purchasedAt: galaRow.linkedAt?.toISOString() || null,
+                    amount: galaRow.ticketPrice,
+                    currency: galaRow.ticketCurrency,
+                    dateTimeStart: galaRow.sessionStartTime?.toISOString() || null,
+                    dateTimeEnd: galaRow.sessionEndTime?.toISOString() || null,
+                    venue: galaRow.sessionRoom,
+                    dietary: reg.dietaryRequirements || null,
+                  }
+                : null,
+              workshops: workshopRows.map((row) => ({
+                id: `${reg.regCode}-WS-${row.sessionId}`,
+                sessionId: row.sessionId,
+                status: reg.status,
+                name: row.sessionName || row.ticketName,
+                purchasedAt: row.linkedAt?.toISOString() || null,
+                amount: row.ticketPrice,
+                currency: row.ticketCurrency,
+                dateTimeStart: row.sessionStartTime?.toISOString() || null,
+                dateTimeEnd: row.sessionEndTime?.toISOString() || null,
+                venue: row.sessionRoom,
+              })),
+            };
+          })
+        );
+
+        return reply.send({ success: true, data: result });
       } catch (error) {
         fastify.log.error(error);
         return reply.status(500).send({
@@ -834,27 +1419,36 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
     "/preview",
     { preHandler: [fastify.authenticate] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const parsed = createPaymentIntentSchema.safeParse(request.body);
+      const rawBody = parsePostbackBody(request.body);
+      if (parsePositiveEventId(rawBody.eventId) === null) {
+        return reply.status(400).send({
+          success: false,
+          code: "MISSING_EVENT_ID",
+          error: "Event is required",
+        });
+      }
+
+      const parsed = createPaymentIntentSchema.safeParse(rawBody);
       if (!parsed.success) {
         return reply.status(400).send({ success: false, error: "Invalid input", details: parsed.error.flatten() });
       }
 
-      const { packageId, addOnIds, currency, paymentMethod, promoCode } = parsed.data;
+      const { eventId, packageId, addOnIds, currency, paymentMethod, promoCode } = parsed.data;
       const userId = request.user.id;
       const isAddonOnly = !packageId || packageId === "";
 
       try {
         // Resolve primary ticket
-        let primaryTicket: { id: number; price: string; eventId: number } | null = null;
+        let primaryTicket: ResolvedTicket | null = null;
         if (!isAddonOnly) {
-          primaryTicket = await resolveTicketId(packageId, currency, "primary");
+          primaryTicket = await resolveTicketId(packageId, eventId, currency, "primary");
         }
 
         // Resolve add-ons
         let subtotal = primaryTicket ? Number(primaryTicket.price) : 0;
-        const resolvedAddOns: { id: number; price: string; eventId: number }[] = [];
+        const resolvedAddOns: ResolvedTicket[] = [];
         for (const addOnId of addOnIds) {
-          const addon = await resolveTicketId(addOnId, currency, "addon");
+          const addon = await resolveTicketId(addOnId, eventId, currency, "addon");
           if (addon) {
             subtotal += Number(addon.price);
             resolvedAddOns.push(addon);
@@ -929,7 +1523,16 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
     { preHandler: [fastify.authenticate] },
     async (request: FastifyRequest, reply: FastifyReply) => {
       // 1. Validate request body with Zod
-      const parsed = createPaymentIntentSchema.safeParse(request.body);
+      const rawBody = parsePostbackBody(request.body);
+      if (parsePositiveEventId(rawBody.eventId) === null) {
+        return reply.status(400).send({
+          success: false,
+          code: "MISSING_EVENT_ID",
+          error: "Event is required",
+        });
+      }
+
+      const parsed = createPaymentIntentSchema.safeParse(rawBody);
       if (!parsed.success) {
         return reply.status(400).send({
           success: false,
@@ -939,6 +1542,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
       }
 
       const {
+        eventId,
         packageId,
         addOnIds,
         currency,
@@ -967,37 +1571,15 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         taxPostalCode,
       });
 
-      fastify.log.info(`[CREATE-INTENT] paymentMethod=${paymentMethod}, currency=${currency}, packageId=${packageId || "(addon-only)"}, isAddonOnly=${isAddonOnly}`);
+      fastify.log.info(
+        `[CREATE-INTENT] eventId=${eventId}, paymentMethod=${paymentMethod}, currency=${currency}, packageId=${packageId || "(addon-only)"}, isAddonOnly=${isAddonOnly}`
+      );
 
       try {
         // ── Duplicate / addon-only guard ─────────────────────
-        // Find user's existing paid orders
-        const existingPaidOrders = await db
-          .select({ id: orders.id })
-          .from(orders)
-          .where(and(eq(orders.userId, userId), eq(orders.status, "paid")));
-
-        let userHasPrimary = false;
-        const userPurchasedAddOns: string[] = [];
-
-        if (existingPaidOrders.length > 0) {
-          const paidOrderIds = existingPaidOrders.map((o) => o.id);
-          const existingItems = await db
-            .select({
-              category: ticketTypes.category,
-              groupName: ticketTypes.groupName,
-            })
-            .from(orderItems)
-            .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
-            .where(inArray(orderItems.orderId, paidOrderIds));
-
-          userHasPrimary = existingItems.some((i) => i.category === "primary");
-          for (const item of existingItems) {
-            if (item.category === "addon" && item.groupName) {
-              userPurchasedAddOns.push(item.groupName.toLowerCase());
-            }
-          }
-        }
+        const purchaseSnapshot = await getPaidPurchaseSnapshot(userId, eventId);
+        const userHasPrimary = purchaseSnapshot.hasPrimaryTicket;
+        const userPurchasedAddOns = purchaseSnapshot.purchasedAddOns;
 
         // Block duplicate primary ticket purchase
         if (!isAddonOnly && userHasPrimary) {
@@ -1048,6 +1630,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             .where(
               and(
                 eq(registrations.userId, userId),
+                eq(registrations.eventId, eventId),
                 eq(registrations.status, "confirmed"),
                 sql`LOWER(${ticketTypes.groupName}) = 'workshop'`,
                 eq(payments.status, "paid")
@@ -1065,43 +1648,76 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         }
 
         // ── Resolve primary ticket (if not addon-only) ──────
-        let primaryTicket: { id: number; price: string; eventId: number } | null = null;
+        let primaryTicket: ResolvedTicket | null = null;
         if (!isAddonOnly) {
-          primaryTicket = await resolveTicketId(packageId, currency, "primary");
+          primaryTicket = await resolveTicketId(packageId, eventId, currency, "primary");
           if (!primaryTicket) {
             return reply.status(404).send({
               success: false,
-              error: `No ${currency} ticket found for package "${packageId}"`,
+              code: "EVENT_TICKET_MISMATCH",
+              error: `No ${currency} ticket found for package "${packageId}" in event ${eventId}`,
             });
           }
 
-          // Check availability
+          // Check availability and sale period
           const [currentTicket] = await db
-            .select({ quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
+            .select({
+              quota: ticketTypes.quota,
+              soldCount: ticketTypes.soldCount,
+              saleStartDate: ticketTypes.saleStartDate,
+              saleEndDate: ticketTypes.saleEndDate,
+            })
             .from(ticketTypes)
             .where(eq(ticketTypes.id, primaryTicket.id))
             .limit(1);
 
-          if (currentTicket && currentTicket.soldCount >= currentTicket.quota) {
-            return reply.status(400).send({
-              success: false,
-              error: "Ticket sold out",
-            });
+          if (currentTicket) {
+            const now = new Date();
+            const saleStart = currentTicket.saleStartDate ? new Date(currentTicket.saleStartDate) : null;
+            const saleEnd = currentTicket.saleEndDate ? new Date(currentTicket.saleEndDate) : null;
+
+            if (saleStart && now < saleStart) {
+              return reply.status(400).send({
+                success: false,
+                error: "Ticket sales have not started yet",
+                code: "SALE_NOT_STARTED",
+                saleStartDate: saleStart.toISOString(),
+              });
+            }
+
+            if (saleEnd && now > saleEnd) {
+              return reply.status(400).send({
+                success: false,
+                error: "Ticket sales have ended",
+                code: "SALE_ENDED",
+              });
+            }
+
+            if (currentTicket.quota > 0 && currentTicket.soldCount >= currentTicket.quota) {
+              return reply.status(400).send({
+                success: false,
+                error: "Ticket sold out",
+              });
+            }
           }
         }
 
         // ── Resolve add-ons ─────────────────────────────────
         let totalAmount = primaryTicket ? Number(primaryTicket.price) : 0;
-        const resolvedAddOns: { id: number; price: string; eventId: number }[] = [];
+        const resolvedAddOns: ResolvedTicket[] = [];
 
         for (const addOnId of addOnIds) {
-          const addon = await resolveTicketId(addOnId, currency, "addon");
+          const addon = await resolveTicketId(addOnId, eventId, currency, "addon");
           if (addon) {
             totalAmount += Number(addon.price);
             resolvedAddOns.push(addon);
             fastify.log.info(`[CREATE-INTENT] Resolved addon "${addOnId}" → ticketTypeId=${addon.id}, price=${addon.price}`);
           } else {
-            fastify.log.info(`[CREATE-INTENT] Could not resolve addon "${addOnId}" for currency=${currency}`);
+            return reply.status(400).send({
+              success: false,
+              code: "EVENT_TICKET_MISMATCH",
+              error: `Add-on "${addOnId}" is not available for event ${eventId}`,
+            });
           }
         }
         fastify.log.info(`[CREATE-INTENT] addOnIds=${JSON.stringify(addOnIds)}, resolved=${resolvedAddOns.length}, total=${totalAmount}`);
@@ -1126,6 +1742,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                 and(
                   inArray(ticketSessions.ticketTypeId, workshopTicketIds),
                   eq(ticketSessions.sessionId, workshopSessionId),
+                  eq(sessions.eventId, eventId),
                   eq(sessions.isActive, true)
                 )
               )
@@ -1139,23 +1756,23 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             }
 
             // Check session capacity
-            const [enrollCount] = await db
-              .select({ count: count() })
-              .from(registrations)
-              .where(
-                and(
-                  eq(registrations.sessionId, workshopSessionId),
-                  eq(registrations.status, "confirmed")
-                )
-              );
-
             const [sessionData] = await db
-              .select({ maxCapacity: sessions.maxCapacity })
+              .select({ maxCapacity: sessions.maxCapacity, eventId: sessions.eventId })
               .from(sessions)
               .where(eq(sessions.id, workshopSessionId))
               .limit(1);
 
-            if (sessionData?.maxCapacity && enrollCount.count >= sessionData.maxCapacity) {
+            if (!sessionData || sessionData.eventId !== eventId) {
+              return reply.status(400).send({
+                success: false,
+                code: "EVENT_SESSION_MISMATCH",
+                error: "Selected workshop session does not belong to this event",
+              });
+            }
+
+            const enrollCount = await countConfirmedWorkshopEnrollments(eventId, workshopSessionId);
+
+            if (sessionData.maxCapacity && enrollCount >= sessionData.maxCapacity) {
               return reply.status(400).send({
                 success: false,
                 error: "Selected workshop session is full",
@@ -1233,8 +1850,6 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           ? calculatePaySolutionsFeeExact(totalAmount, feeMethod)
           : { fee: 0, total: 0, processingFee: 0, processingVat: 0 };
         const chargeAmount = feeBreakdown.total;
-        const paySolutionsChannel = resolvePaySolutionsChannel(paymentMethod, currency);
-        const paySolutionsRefno = await generatePaySolutionsRefno();
 
         // 7. Create Order record (with orderNumber + promo info)
         const orderNumber = generateOrderNumber();
@@ -1242,6 +1857,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           .insert(orders)
           .values({
             userId,
+            eventId,
             orderNumber,
             subtotalAmount: String(subtotalBeforeDiscount),
             discountAmount: String(discountAmount),
@@ -1286,6 +1902,131 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           });
         }
 
+        // ── FREE REGISTRATION PATH ──────────────────────────
+        // If chargeAmount is 0 (free ticket or 100% promo), process immediately
+        if (chargeAmount === 0) {
+          fastify.log.info(`[CREATE-INTENT] chargeAmount=0, processing free registration for order ${order.id}`);
+
+          // Mark order as paid immediately
+          await db.update(orders).set({ status: "paid" }).where(eq(orders.id, order.id));
+
+          // Create a payment record for auditing
+          await db.insert(payments).values({
+            orderId: order.id,
+            amount: "0",
+            status: "paid",
+            paymentChannel: "free",
+            paymentProvider: "pay_solutions",
+            providerRef: `FREE-${order.orderNumber}`,
+            providerStatus: "PAID",
+            paySolutionsRefno: null,
+            paySolutionsChannel: null,
+            paymentDetails: {
+              requestedMethod: "free",
+              workshopSessionId: workshopSessionId || null,
+              processingFee: 0,
+              processingVat: 0,
+              freeReason: discountAmount > 0 ? "promo_100_percent" : "free_ticket",
+            },
+          });
+
+          // Settle promo usage
+          if (promoResult.promoCodeId) {
+            await reservePromoUsage(promoResult.promoCodeId, userId, order.id, discountAmount);
+            await settlePromoUsageSuccess(order.id);
+            fastify.log.info(`[CREATE-INTENT] Promo settled for free order ${order.id}`);
+          }
+
+          // Process registration (reuse shared helper)
+          const result = await processSuccessfulPayment(
+            fastify,
+            order.id,
+            `FREE-${order.orderNumber}`,
+            workshopSessionId || null,
+            null,
+            "free",
+            "pay_solutions",
+            "PAID",
+            { freeRegistration: true },
+          );
+
+          const regCode = result?.regCode || "";
+
+          // Send confirmation email
+          if (result) {
+            try {
+              const apiBaseUrl = getPublicApiBaseUrl();
+              const receiptToken = generateReceiptToken(order.id);
+              const receiptDownloadUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
+
+              const items = await db
+                .select({
+                  name: ticketTypes.name,
+                  price: ticketTypes.price,
+                  category: ticketTypes.category,
+                })
+                .from(orderItems)
+                .innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
+                .where(eq(orderItems.orderId, order.id));
+
+              await sendPaymentReceiptEmail(
+                result.user.email,
+                result.user.firstName,
+                result.user.lastName,
+                order.orderNumber,
+                new Date(),
+                "free",
+                items.map((i) => ({
+                  name: i.name,
+                  type: i.category,
+                  price: Number(i.price),
+                })),
+                subtotalBeforeDiscount,
+                0,
+                0,
+                currency,
+                receiptDownloadUrl,
+                order.needTaxInvoice
+                  ? {
+                      taxName: order.taxName || "",
+                      taxId: order.taxId || "",
+                      taxFullAddress: order.taxFullAddress || "",
+                    }
+                  : undefined,
+                regCode,
+              );
+            } catch (emailErr) {
+              fastify.log.error(emailErr, "[CREATE-INTENT] Failed to send free registration email");
+            }
+          }
+
+          return reply.send({
+            success: true,
+            data: {
+              free: true,
+              gateway: null,
+              redirectForm: null,
+              refno: null,
+              orderRef: null,
+              orderId: order.id,
+              orderNumber,
+              regCode,
+              subtotal: subtotalBeforeDiscount,
+              discountAmount,
+              discountType: promoResult.discountType || null,
+              discountValue: promoResult.discountValue || null,
+              netAmount: 0,
+              fee: 0,
+              total: 0,
+              currency,
+              feeMethod: null,
+              paymentChannel: "free",
+            },
+          });
+        }
+
+        // ── PAID FLOW (chargeAmount > 0) ─────────────────────
+
         // Build order detail for Pay Solutions redirect
         const ticketIds = [
           ...(primaryTicket ? [primaryTicket.id] : []),
@@ -1317,6 +2058,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           .select({
             email: users.email,
             phone: users.phone,
+            firstName: users.firstName,
+            lastName: users.lastName,
           })
           .from(users)
           .where(eq(users.id, userId))
@@ -1326,13 +2069,99 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           return reply.status(404).send({ success: false, error: "User not found" });
         }
 
-        const requestedLocale = String(request.headers["x-locale"] || "").toLowerCase();
+        const requestedLocale = String(request.headers["accept-language"] || request.headers["x-locale"] || "").toLowerCase();
         const referer = String(request.headers.referer || "").toLowerCase();
         const paySolutionsLang: "TH" | "EN" =
           requestedLocale.startsWith("th") || referer.includes("/th/") ? "TH" : "EN";
 
         const secureOrderDetail = descLines.join(" | ").slice(0, 255);
+        const customerFullName = `${buyer.firstName || ""} ${buyer.lastName || ""}`.trim();
 
+        const sourceApp = String(request.headers["x-source-app"] || "").toLowerCase();
+        const shouldUseKtbGateway =
+          sourceApp === "conference-web" &&
+          currency === "THB" &&
+          isKtbFastpayConfigured();
+
+        if (sourceApp === "conference-web" && currency === "THB" && !shouldUseKtbGateway) {
+          fastify.log.warn("[CREATE-INTENT] KTB FASTPAY not configured, falling back to Pay Solutions");
+        }
+
+        if (shouldUseKtbGateway) {
+          const ktbOrderRef = generateKtbOrderRef(order.id);
+          const ktbPayMethod = mapRequestedPaymentMethodToKtb(paymentMethod);
+          const apiBaseUrl = getPublicApiBaseUrl();
+          const ktbPayload = createKtbFormPayload({
+            orderRef: ktbOrderRef,
+            amount: chargeAmount,
+            successUrl: `${apiBaseUrl}/api/payments/ktb/return?result=success`,
+            failUrl: `${apiBaseUrl}/api/payments/ktb/return?result=fail`,
+            cancelUrl: `${apiBaseUrl}/api/payments/ktb/return?result=cancel`,
+            payType: "N",
+            lang: getRequestedKtbLang(request),
+            payMethod: ktbPayMethod,
+            customerEmail: buyer.email,
+            remark: secureOrderDetail,
+            orderRef1: String(order.id),
+            orderRef2: orderNumber,
+          });
+
+          await db.insert(payments).values({
+            orderId: order.id,
+            amount: String(chargeAmount),
+            status: "pending",
+            paymentChannel: paymentMethod === "qr" ? "qr" : "card",
+            paymentProvider: "ktb_fastpay",
+            providerRef: ktbOrderRef,
+            providerStatus: "PENDING",
+            paymentDetails: {
+              requestedMethod: paymentMethod,
+              workshopSessionId: workshopSessionId || null,
+              processingFee: feeBreakdown.processingFee,
+              processingVat: feeBreakdown.processingVat,
+              ktb: {
+                request: ktbPayload.fields,
+                actionUrl: ktbPayload.actionUrl,
+                orderRef: ktbOrderRef,
+              },
+            },
+          });
+
+          if (promoResult.promoCodeId) {
+            await reservePromoUsage(promoResult.promoCodeId, userId, order.id, discountAmount);
+            fastify.log.info(`[CREATE-INTENT] Reserved promo usage for order ${order.id}, promoId=${promoResult.promoCodeId}`);
+          }
+
+          fastify.log.info(
+            `[CREATE-INTENT] flow=ktb_fastpay actionUrl=${ktbPayload.actionUrl}, amount=${chargeAmount}, orderRef=${ktbOrderRef}, payMethod=${ktbPayMethod || "auto"}`
+          );
+
+          return reply.send({
+            success: true,
+            data: {
+              free: false,
+              gateway: "ktb",
+              redirectForm: ktbPayload,
+              refno: ktbOrderRef,
+              orderRef: ktbOrderRef,
+              orderId: order.id,
+              orderNumber,
+              subtotal: subtotalBeforeDiscount,
+              discountAmount,
+              discountType: promoResult.discountType || null,
+              discountValue: promoResult.discountValue || null,
+              netAmount: totalAmount,
+              fee: feeBreakdown.fee,
+              total: chargeAmount,
+              currency,
+              feeMethod,
+              paymentChannel: paymentMethod === "qr" ? "qr" : "card",
+            },
+          });
+        }
+
+        const paySolutionsChannel = resolvePaySolutionsChannel(paymentMethod, currency);
+        const paySolutionsRefno = await generatePaySolutionsRefno();
         let formSubmitPayload: ReturnType<typeof createFormSubmitPayload> | null = null;
 
         try {
@@ -1341,13 +2170,14 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             orderDetail: secureOrderDetail,
             refNo: paySolutionsRefno,
             userEmail: buyer.email,
+            customerName: customerFullName || undefined,
             channel: paySolutionsChannel,
             currency,
             lang: paySolutionsLang,
           });
 
           fastify.log.info(
-            `[CREATE-INTENT] flow=form_submit actionUrl=${formSubmitPayload.actionUrl}, channel=${paySolutionsChannel}, amount=${chargeAmount}, refno=${paySolutionsRefno}`
+            `[CREATE-INTENT] flow=form_submit actionUrl=${formSubmitPayload.actionUrl}, channel=${paySolutionsChannel}, amount=${chargeAmount}, refno=${paySolutionsRefno}, customerName="${customerFullName}", fields=${JSON.stringify(Object.keys(formSubmitPayload.fields))}`
           );
         } catch (formSubmitErr) {
           await db
@@ -1392,8 +2222,11 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         return reply.send({
           success: true,
           data: {
+            free: false,
+            gateway: "pay_solutions",
             redirectForm: formSubmitPayload,
             refno: paySolutionsRefno,
+            orderRef: null,
             orderId: order.id,
             orderNumber,
             subtotal: subtotalBeforeDiscount,
@@ -1922,19 +2755,22 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
     "/verify",
     { preHandler: [fastify.authenticate] },
     async (request: FastifyRequest, reply: FastifyReply) => {
-      const { payment_intent: piId, refno } = request.query as {
+      const { payment_intent: piId, refno, orderRef } = request.query as {
         payment_intent?: string;
         refno?: string;
+        orderRef?: string;
       };
       const userId = request.user.id;
 
-      if (!piId && !refno) {
-        return reply.status(400).send({ success: false, error: "Missing refno or payment_intent parameter" });
+      if (!piId && !refno && !orderRef) {
+        return reply.status(400).send({ success: false, error: "Missing refno, orderRef, or payment_intent parameter" });
       }
 
-      const paymentWhere = refno
-        ? eq(payments.paySolutionsRefno, refno)
-        : eq(payments.stripeSessionId, piId || "");
+      const paymentWhere = orderRef
+        ? and(eq(payments.paymentProvider, "ktb_fastpay"), eq(payments.providerRef, orderRef))
+        : refno
+          ? eq(payments.paySolutionsRefno, refno)
+          : eq(payments.stripeSessionId, piId || "");
 
       const [payment] = await db
         .select({
@@ -1947,6 +2783,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           paymentChannel: payments.paymentChannel,
           stripeSessionId: payments.stripeSessionId,
           paymentProvider: payments.paymentProvider,
+          providerRef: payments.providerRef,
           providerStatus: payments.providerStatus,
           paySolutionsRefno: payments.paySolutionsRefno,
           paySolutionsOrderNo: payments.paySolutionsOrderNo,
@@ -2216,12 +3053,30 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         }
       }
 
+      if (!verifyRegCode) {
+        const [registration] = await db
+          .select({ regCode: registrations.regCode })
+          .from(registrations)
+          .where(
+            and(
+              eq(registrations.userId, order.userId),
+              eq(registrations.status, "confirmed")
+            )
+          )
+          .orderBy(desc(registrations.id))
+          .limit(1);
+
+        verifyRegCode = registration?.regCode || "";
+      }
+
       return reply.send({
         success: true,
         data: {
           orderId: order.id,
           orderNumber: order.orderNumber,
           orderStatus,
+          gateway: mapGatewayFromPaymentProvider(paymentData.paymentProvider),
+          regCode: verifyRegCode || null,
           currency: order.currency,
           payment: {
             status: paymentData.status,
@@ -2229,6 +3084,9 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             paidAt: paymentData.paidAt,
             stripeReceiptUrl: paymentData.stripeReceiptUrl,
             paymentChannel: paymentData.paymentChannel,
+            paymentProvider: paymentData.paymentProvider,
+            providerStatus: paymentData.providerStatus,
+            providerRef: paymentData.providerRef,
           },
           receiptDownloadUrl,
           items: sortedItems.map(item => ({

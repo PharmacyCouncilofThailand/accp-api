@@ -1,6 +1,6 @@
 {
-  "id": "9aeb875b-b83b-4fb3-ad34-472918608764",
-  "prevId": "5ef80ac6-3529-4877-a0d8-2c04101bb777",
+  "id": "fec3f361-0a3c-44bf-b75f-3b8581ee3a20",
+  "prevId": "9aeb875b-b83b-4fb3-ad34-472918608764",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -840,6 +840,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "cover_image": {
+          "name": "cover_image",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "map_url": {
           "name": "map_url",
           "type": "varchar(500)",
@@ -1028,6 +1034,43 @@
           "primaryKey": false,
           "notNull": true
         },
+        "subtotal_amount": {
+          "name": "subtotal_amount",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "discount_amount": {
+          "name": "discount_amount",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'0'"
+        },
+        "promo_code_id": {
+          "name": "promo_code_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promo_code": {
+          "name": "promo_code",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promo_discount_type": {
+          "name": "promo_discount_type",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promo_discount_value": {
+          "name": "promo_discount_value",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "total_amount": {
           "name": "total_amount",
           "type": "numeric(10, 2)",
@@ -1049,6 +1092,67 @@
           "notNull": true,
           "default": "'pending'"
         },
+        "need_tax_invoice": {
+          "name": "need_tax_invoice",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "tax_name": {
+          "name": "tax_name",
+          "type": "varchar(200)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tax_id": {
+          "name": "tax_id",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tax_address": {
+          "name": "tax_address",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tax_sub_district": {
+          "name": "tax_sub_district",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tax_district": {
+          "name": "tax_district",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tax_province": {
+          "name": "tax_province",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tax_postal_code": {
+          "name": "tax_postal_code",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tax_full_address": {
+          "name": "tax_full_address",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tax_created_at": {
+          "name": "tax_created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -1065,6 +1169,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "orders_promo_code_id_promo_codes_id_fk": {
+          "name": "orders_promo_code_id_promo_codes_id_fk",
+          "tableFrom": "orders",
+          "tableTo": "promo_codes",
+          "columnsFrom": [
+            "promo_code_id"
           ],
           "columnsTo": [
             "id"
@@ -1199,6 +1316,43 @@
           "primaryKey": false,
           "notNull": false
         },
+        "payment_provider": {
+          "name": "payment_provider",
+          "type": "varchar(30)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'stripe'"
+        },
+        "provider_ref": {
+          "name": "provider_ref",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_status": {
+          "name": "provider_status",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pay_solutions_refno": {
+          "name": "pay_solutions_refno",
+          "type": "varchar(12)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pay_solutions_order_no": {
+          "name": "pay_solutions_order_no",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pay_solutions_channel": {
+          "name": "pay_solutions_channel",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "stripe_receipt_url": {
           "name": "stripe_receipt_url",
           "type": "varchar(500)",
@@ -1223,6 +1377,225 @@
         "payments_order_id_orders_id_fk": {
           "name": "payments_order_id_orders_id_fk",
           "tableFrom": "payments",
+          "tableTo": "orders",
+          "columnsFrom": [
+            "order_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.promo_code_rule_items": {
+      "name": "promo_code_rule_items",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "rule_set_id": {
+          "name": "rule_set_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ticket_type_id": {
+          "name": "ticket_type_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "promo_code_rule_items_rule_set_id_promo_code_rule_sets_id_fk": {
+          "name": "promo_code_rule_items_rule_set_id_promo_code_rule_sets_id_fk",
+          "tableFrom": "promo_code_rule_items",
+          "tableTo": "promo_code_rule_sets",
+          "columnsFrom": [
+            "rule_set_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "promo_code_rule_items_ticket_type_id_ticket_types_id_fk": {
+          "name": "promo_code_rule_items_ticket_type_id_ticket_types_id_fk",
+          "tableFrom": "promo_code_rule_items",
+          "tableTo": "ticket_types",
+          "columnsFrom": [
+            "ticket_type_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.promo_code_rule_sets": {
+      "name": "promo_code_rule_sets",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "promo_code_id": {
+          "name": "promo_code_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "match_type": {
+          "name": "match_type",
+          "type": "varchar(10)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'all'"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "promo_code_rule_sets_promo_code_id_promo_codes_id_fk": {
+          "name": "promo_code_rule_sets_promo_code_id_promo_codes_id_fk",
+          "tableFrom": "promo_code_rule_sets",
+          "tableTo": "promo_codes",
+          "columnsFrom": [
+            "promo_code_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.promo_code_usages": {
+      "name": "promo_code_usages",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "promo_code_id": {
+          "name": "promo_code_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "order_id": {
+          "name": "order_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "discount_amount": {
+          "name": "discount_amount",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reserved_at": {
+          "name": "reserved_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "used_at": {
+          "name": "used_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancelled_at": {
+          "name": "cancelled_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "promo_code_usages_promo_code_id_promo_codes_id_fk": {
+          "name": "promo_code_usages_promo_code_id_promo_codes_id_fk",
+          "tableFrom": "promo_code_usages",
+          "tableTo": "promo_codes",
+          "columnsFrom": [
+            "promo_code_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "promo_code_usages_user_id_users_id_fk": {
+          "name": "promo_code_usages_user_id_users_id_fk",
+          "tableFrom": "promo_code_usages",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "promo_code_usages_order_id_orders_id_fk": {
+          "name": "promo_code_usages_order_id_orders_id_fk",
+          "tableFrom": "promo_code_usages",
           "tableTo": "orders",
           "columnsFrom": [
             "order_id"
@@ -1286,11 +1659,43 @@
           "primaryKey": false,
           "notNull": true
         },
+        "fixed_value_thb": {
+          "name": "fixed_value_thb",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fixed_value_usd": {
+          "name": "fixed_value_usd",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "min_purchase": {
+          "name": "min_purchase",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'0'"
+        },
+        "max_discount": {
+          "name": "max_discount",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "max_uses": {
           "name": "max_uses",
           "type": "integer",
           "primaryKey": false,
           "notNull": true
+        },
+        "max_uses_per_user": {
+          "name": "max_uses_per_user",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
         },
         "used_count": {
           "name": "used_count",
@@ -1487,6 +1892,25 @@
           "primaryKey": false,
           "notNull": false
         },
+        "source": {
+          "name": "source",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'purchase'"
+        },
+        "added_by": {
+          "name": "added_by",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "added_note": {
+          "name": "added_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -1542,6 +1966,19 @@
           "tableTo": "backoffice_users",
           "columnsFrom": [
             "checked_in_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "registration_sessions_added_by_backoffice_users_id_fk": {
+          "name": "registration_sessions_added_by_backoffice_users_id_fk",
+          "tableFrom": "registration_sessions",
+          "tableTo": "backoffice_users",
+          "columnsFrom": [
+            "added_by"
           ],
           "columnsTo": [
             "id"
@@ -1634,6 +2071,25 @@
           "notNull": true,
           "default": "'confirmed'"
         },
+        "source": {
+          "name": "source",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'purchase'"
+        },
+        "added_by": {
+          "name": "added_by",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "added_note": {
+          "name": "added_note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -1702,6 +2158,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "registrations_added_by_backoffice_users_id_fk": {
+          "name": "registrations_added_by_backoffice_users_id_fk",
+          "tableFrom": "registrations",
+          "tableTo": "backoffice_users",
+          "columnsFrom": [
+            "added_by"
           ],
           "columnsTo": [
             "id"
@@ -1779,12 +2248,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "agenda_time": {
-          "name": "agenda_time",
-          "type": "varchar(120)",
-          "primaryKey": false,
-          "notNull": false
-        },
         "start_time": {
           "name": "start_time",
           "type": "timestamp",
@@ -1803,6 +2266,12 @@
           "primaryKey": false,
           "notNull": false,
           "default": 100
+        },
+        "agenda": {
+          "name": "agenda",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
         },
         "is_active": {
           "name": "is_active",
@@ -2580,7 +3049,8 @@
         "thstd",
         "interstd",
         "thpro",
-        "interpro"
+        "interpro",
+        "general"
       ]
     }
   },

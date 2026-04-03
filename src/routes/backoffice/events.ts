@@ -202,14 +202,14 @@ export default async function (fastify: FastifyInstance) {
       const allSpeakers =
         sessionIds.length > 0
           ? await db
-              .select({
-                sessionId: eventSpeakers.sessionId,
-                firstName: speakers.firstName,
-                lastName: speakers.lastName,
-              })
-              .from(eventSpeakers)
-              .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
-              .where(inArray(eventSpeakers.sessionId, sessionIds))
+            .select({
+              sessionId: eventSpeakers.sessionId,
+              firstName: speakers.firstName,
+              lastName: speakers.lastName,
+            })
+            .from(eventSpeakers)
+            .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
+            .where(inArray(eventSpeakers.sessionId, sessionIds))
           : [];
 
       // Group speakers by session in memory
@@ -285,21 +285,25 @@ export default async function (fastify: FastifyInstance) {
           eventType: data.eventType,
           location: data.location,
           category: data.category,
-          startDate: new Date(new Date(data.startDate).setHours(0, 0, 0, 0)),
-          endDate: new Date(new Date(data.endDate).setHours(0, 0, 0, 0)),
+          startDate: new Date(data.startDate),
+          endDate: new Date(data.endDate),
           maxCapacity: data.maxCapacity,
           conferenceCode: data.conferenceCode,
           cpeCredits:
             data.cpeCredits != null ? String(data.cpeCredits) : undefined,
           status: data.status,
           imageUrl: data.imageUrl,
+          coverImage: data.coverImage,
+          videoUrl: data.videoUrl,
           mapUrl: data.mapUrl,
+          websiteUrl: data.websiteUrl,
           abstractStartDate: data.abstractStartDate
             ? new Date(new Date(data.abstractStartDate).setHours(0, 0, 0, 0))
             : null,
           abstractEndDate: data.abstractEndDate
             ? new Date(new Date(data.abstractEndDate).setHours(0, 0, 0, 0))
             : null,
+          documents: data.documents,
         })
         .returning();
 
@@ -348,11 +352,9 @@ export default async function (fastify: FastifyInstance) {
 
       // Convert date strings to Date objects
       if (data.startDate)
-        updates.startDate = new Date(
-          new Date(data.startDate).setHours(0, 0, 0, 0),
-        );
+        updates.startDate = new Date(data.startDate);
       if (data.endDate)
-        updates.endDate = new Date(new Date(data.endDate).setHours(0, 0, 0, 0));
+        updates.endDate = new Date(data.endDate);
       if (data.abstractStartDate)
         updates.abstractStartDate = new Date(
           new Date(data.abstractStartDate).setHours(0, 0, 0, 0),
@@ -449,14 +451,14 @@ export default async function (fastify: FastifyInstance) {
       const allSpeakers =
         sessionIds.length > 0
           ? await db
-              .select({
-                sessionId: eventSpeakers.sessionId,
-                firstName: speakers.firstName,
-                lastName: speakers.lastName,
-              })
-              .from(eventSpeakers)
-              .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
-              .where(inArray(eventSpeakers.sessionId, sessionIds))
+            .select({
+              sessionId: eventSpeakers.sessionId,
+              firstName: speakers.firstName,
+              lastName: speakers.lastName,
+            })
+            .from(eventSpeakers)
+            .innerJoin(speakers, eq(eventSpeakers.speakerId, speakers.id))
+            .where(inArray(eventSpeakers.sessionId, sessionIds))
           : [];
 
       // Group speakers by session in memory
@@ -702,9 +704,9 @@ export default async function (fastify: FastifyInstance) {
       const allSessionLinks =
         ticketIds.length > 0
           ? await db
-              .select()
-              .from(ticketSessions)
-              .where(inArray(ticketSessions.ticketTypeId, ticketIds))
+            .select()
+            .from(ticketSessions)
+            .where(inArray(ticketSessions.ticketTypeId, ticketIds))
           : [];
 
       // Group session links by ticket in memory

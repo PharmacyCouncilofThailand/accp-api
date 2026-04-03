@@ -1,10 +1,18 @@
 import "dotenv/config";
 import Fastify, { FastifyRequest, FastifyReply, FastifyError } from "fastify";
 import cors from "@fastify/cors";
+import formbody from "@fastify/formbody";
 import multipart from "@fastify/multipart";
 import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
 import { ApiError } from "./errors/ApiError.js";
+import fastifyStatic from "@fastify/static";
+import path from "path";
+import { fileURLToPath } from "url";
+import fs from "fs";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // JWT Secret validation - always required
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -21,11 +29,11 @@ const fastify = Fastify({ logger: true });
 // ============================================================================
 const corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(origin => origin.trim())
-  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001'];
+  : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:3001', 'http://127.0.0.1:3001', 'http://localhost:3003', 'http://127.0.0.1:3003', 'http://localhost:3005', 'http://127.0.0.1:3005'];
 
 fastify.register(cors, {
   origin: corsOrigins,
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Source-App'],
   credentials: true
 });
 
@@ -45,13 +53,26 @@ fastify.register(rateLimit, {
 // ============================================================================
 // Multipart & JWT
 // ============================================================================
+fastify.register(formbody);
 fastify.register(multipart, {
   limits: {
-    fileSize: 30 * 1024 * 1024, // 30MB
+    fileSize: 50 * 1024 * 1024, // 50MB
   },
 });
 fastify.register(jwt, {
   secret: JWT_SECRET,
+});
+
+// ============================================================================
+// Static Files Serving
+// ============================================================================
+const publicPath = path.join(__dirname, '..', 'public');
+if (!fs.existsSync(publicPath)) {
+  fs.mkdirSync(publicPath, { recursive: true });
+}
+fastify.register(fastifyStatic, {
+  root: publicPath,
+  prefix: '/public/',
 });
 
 // ============================================================================
@@ -123,6 +144,7 @@ import loginRoutes from "./routes/auth/login.js";
 import forgotPasswordRoutes from "./routes/auth/forgot-password.js";
 import resetPasswordRoutes from "./routes/auth/reset-password.js";
 import resubmitDocumentRoutes from "./routes/auth/resubmit-document.js";
+import ssoRoutes from "./routes/auth/sso.js";
 import { uploadRoutes } from "./routes/upload/index.js";
 import backofficeLoginRoutes from "./routes/backoffice/login.js";
 import backofficeUsersRoutes from "./routes/backoffice/users.js";
@@ -144,7 +166,11 @@ import userAbstractsRoutes from "./routes/public/abstracts/user.js";
 import publicWorkshopsRoutes from "./routes/public/workshops.js";
 import publicTicketsRoutes from "./routes/public/tickets.js";
 import publicContactRoutes from "./routes/public/contact.js";
+import fileProxyRoutes from "./routes/public/files.js";
+import driveFolderRoutes from "./routes/public/drive-folder.js";
+import driveImageRoutes from "./routes/public/drive-image.js";
 import paymentRoutes from "./routes/payments/index.js";
+import freeRegistrationRoutes from "./routes/registrations/free.js";
 
 // ============================================================================
 // Public Routes (No Auth Required)
@@ -173,10 +199,11 @@ fastify.register(async (authPlugin) => {
 }, { prefix: "/auth" });
 
 fastify.register(authRoutes, { prefix: "/auth" });
+fastify.register(ssoRoutes, { prefix: "/auth" });
 fastify.register(forgotPasswordRoutes, { prefix: "/auth" });
 fastify.register(resetPasswordRoutes, { prefix: "/auth" });
 fastify.register(resubmitDocumentRoutes, { prefix: "/auth" });
-fastify.register(uploadRoutes, { prefix: "/upload" });
+fastify.register(uploadRoutes, { prefix: "/api/upload" });
 fastify.register(backofficeLoginRoutes, { prefix: "/backoffice" });
 
 // Public API routes
@@ -188,7 +215,11 @@ fastify.register(userAbstractsRoutes, { prefix: "/api/abstracts/user" });
 fastify.register(publicWorkshopsRoutes, { prefix: "/api/workshops" });
 fastify.register(publicTicketsRoutes, { prefix: "/api/tickets" });
 fastify.register(publicContactRoutes, { prefix: "/api/contact" });
+fastify.register(fileProxyRoutes, { prefix: "/api/files" });
+fastify.register(driveFolderRoutes, { prefix: "/api/drive-folder" });
+fastify.register(driveImageRoutes, { prefix: "/api/drive-image" });
 fastify.register(paymentRoutes, { prefix: "/api/payments" });
+fastify.register(freeRegistrationRoutes, { prefix: "/api/registrations" });
 
 // ============================================================================
 // Protected Backoffice Routes (Auth Required)

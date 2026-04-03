@@ -256,7 +256,15 @@ export default async function (fastify: FastifyInstance) {
 
                 // 2. Validate event exists
                 const [event] = await tx
-                    .select({ id: events.id, eventName: events.eventName })
+                    .select({
+                        id: events.id,
+                        eventName: events.eventName,
+                        startDate: events.startDate,
+                        endDate: events.endDate,
+                        location: events.location,
+                        websiteUrl: events.websiteUrl,
+                        shortName: events.shortName,
+                    })
                     .from(events)
                     .where(eq(events.id, eventId))
                     .limit(1);
@@ -284,7 +292,7 @@ export default async function (fastify: FastifyInstance) {
                 if (existing) throw new Error("DUPLICATE_REGISTRATION");
 
                 // 5. Check quota
-                if (ticket.soldCount >= ticket.quota) throw new Error("TICKET_SOLD_OUT");
+                if (ticket.quota > 0 && ticket.soldCount >= ticket.quota) throw new Error("TICKET_SOLD_OUT");
 
                 // 6. Generate regCode & insert registration
                 const regCode = generateRegCode();
@@ -345,6 +353,7 @@ export default async function (fastify: FastifyInstance) {
                     ...newReg,
                     ticketName: ticket.name,
                     eventName: event.eventName,
+                    eventRow: event,
                     sessionCount: sessionsToLink.length,
                     sessionsLinked: sessionsToLink,
                     userEmail: user.email,
@@ -361,22 +370,37 @@ export default async function (fastify: FastifyInstance) {
             // Send confirmation email in background (non-blocking)
             setImmediate(async () => {
                 try {
-                    const { sendManualRegistrationEmail } = await import("../../services/emailService.js");
                     const sessionDetails = registration.sessionsLinked.length > 0
                         ? await db
                             .select({ sessionName: sessions.sessionName, startTime: sessions.startTime, endTime: sessions.endTime })
                             .from(sessions)
                             .where(inArray(sessions.id, registration.sessionsLinked))
                         : [];
-                    await sendManualRegistrationEmail(
-                        registration.userEmail,
-                        registration.userFirstName,
-                        registration.userLastName,
-                        registration.regCode,
-                        registration.eventName,
-                        registration.ticketName,
-                        sessionDetails,
-                    );
+                    if (eventId === 1) {
+                        const { sendManualRegistrationEmail } = await import("../../services/emailService.js");
+                        await sendManualRegistrationEmail(
+                            registration.userEmail,
+                            registration.userFirstName,
+                            registration.userLastName,
+                            registration.regCode,
+                            registration.eventRow.eventName,
+                            registration.ticketName,
+                            sessionDetails,
+                        );
+                    } else {
+                        const { sendEventRegistrationEmail } = await import("../../services/emailTemplates.js");
+                        const { buildEventEmailContext } = await import("../../services/emailTemplates.types.js");
+                        const eventCtx = buildEventEmailContext(registration.eventRow);
+                        await sendEventRegistrationEmail(
+                            registration.userEmail,
+                            registration.userFirstName,
+                            registration.userLastName,
+                            registration.regCode,
+                            registration.ticketName,
+                            sessionDetails,
+                            eventCtx,
+                        );
+                    }
                 } catch (emailErr) {
                     fastify.log.error({ err: emailErr }, "Failed to send manual registration email");
                 }
@@ -594,7 +618,15 @@ export default async function (fastify: FastifyInstance) {
             const results = await db.transaction(async (tx) => {
                 // 1. Validate event exists
                 const [event] = await tx
-                    .select({ id: events.id, eventName: events.eventName })
+                    .select({
+                        id: events.id,
+                        eventName: events.eventName,
+                        startDate: events.startDate,
+                        endDate: events.endDate,
+                        location: events.location,
+                        websiteUrl: events.websiteUrl,
+                        shortName: events.shortName,
+                    })
                     .from(events)
                     .where(eq(events.id, eventId))
                     .limit(1);
@@ -714,7 +746,7 @@ export default async function (fastify: FastifyInstance) {
                     }
 
                     // Check quota
-                    if (ticket.soldCount + addedCount >= ticket.quota) {
+                    if (ticket.quota > 0 && ticket.soldCount + addedCount >= ticket.quota) {
                         skippedList.push({ userId, reason: "TICKET_SOLD_OUT" });
                         continue;
                     }
@@ -764,7 +796,7 @@ export default async function (fastify: FastifyInstance) {
                         .where(eq(ticketTypes.id, ticketTypeId));
                 }
 
-                return { successList, skippedList, addedCount, sessionsToLink };
+                return { successList, skippedList, addedCount, sessionsToLink, eventRow: event };
             });
 
             reply.status(201).send({
@@ -778,13 +810,17 @@ export default async function (fastify: FastifyInstance) {
             if (results.successList.length > 0) {
                 setImmediate(async () => {
                     try {
-                        const { sendManualRegistrationEmail } = await import("../../services/emailService.js");
                         const sessionDetails = results.sessionsToLink.length > 0
                             ? await db
                                 .select({ sessionName: sessions.sessionName, startTime: sessions.startTime, endTime: sessions.endTime })
                                 .from(sessions)
                                 .where(inArray(sessions.id, results.sessionsToLink))
                             : [];
+
+                        const isAccp = eventId === 1;
+                        const { sendEventRegistrationEmail } = isAccp ? { sendEventRegistrationEmail: null } : await import("../../services/emailTemplates.js");
+                        const { sendManualRegistrationEmail } = isAccp ? await import("../../services/emailService.js") : { sendManualRegistrationEmail: null };
+                        const eventCtx = isAccp ? null : (await import("../../services/emailTemplates.types.js")).buildEventEmailContext(results.eventRow);
 
                         for (const reg of results.successList) {
                             try {
@@ -794,22 +830,33 @@ export default async function (fastify: FastifyInstance) {
                                     .where(eq(users.id, reg.userId))
                                     .limit(1);
                                 const ticketRow = await db
-                                    .select({ name: ticketTypes.name, eventName: events.eventName })
+                                    .select({ name: ticketTypes.name })
                                     .from(ticketTypes)
-                                    .innerJoin(events, eq(ticketTypes.eventId, events.id))
                                     .where(eq(ticketTypes.id, ticketTypeId))
                                     .limit(1);
 
                                 if (user[0] && ticketRow[0]) {
-                                    await sendManualRegistrationEmail(
-                                        user[0].email,
-                                        reg.firstName,
-                                        reg.lastName,
-                                        reg.regCode,
-                                        ticketRow[0].eventName,
-                                        ticketRow[0].name,
-                                        sessionDetails,
-                                    );
+                                    if (isAccp && sendManualRegistrationEmail) {
+                                        await sendManualRegistrationEmail(
+                                            user[0].email,
+                                            reg.firstName,
+                                            reg.lastName,
+                                            reg.regCode,
+                                            results.eventRow.eventName,
+                                            ticketRow[0].name,
+                                            sessionDetails,
+                                        );
+                                    } else if (!isAccp && sendEventRegistrationEmail && eventCtx) {
+                                        await sendEventRegistrationEmail(
+                                            user[0].email,
+                                            reg.firstName,
+                                            reg.lastName,
+                                            reg.regCode,
+                                            ticketRow[0].name,
+                                            sessionDetails,
+                                            eventCtx,
+                                        );
+                                    }
                                 }
                             } catch (emailErr) {
                                 fastify.log.error({ err: emailErr, regCode: reg.regCode }, "Failed to send manual registration email");

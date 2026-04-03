@@ -1,18 +1,22 @@
 import { FastifyInstance } from "fastify";
 import { registerBodySchema } from "../../schemas/auth.schema.js";
 import { db } from "../../database/index.js";
-import { users } from "../../database/schema.js";
+import { users, events } from "../../database/schema.js";
 import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { uploadToGoogleDrive } from "../../services/googleDrive.js";
 import { sendPendingApprovalEmail, sendSignupNotificationEmail } from "../../services/emailService.js";
+import { sendEventSignupNotificationEmail, sendEventPendingApprovalEmail } from "../../services/emailTemplates.js";
+import { buildEventEmailContext } from "../../services/emailTemplates.types.js";
 import { verifyRecaptcha, isRecaptchaEnabled } from "../../utils/recaptcha.js";
+import { JWT_EXPIRY } from "../../constants/auth.js";
 
 const roleMapping = {
   thaiStudent: "thstd",
   internationalStudent: "interstd",
   thaiProfessional: "thpro",
   internationalProfessional: "interpro",
+  generalPublic: "general",
 } as const;
 
 // Allowed file types for verification documents
@@ -83,12 +87,15 @@ export async function authRoutes(fastify: FastifyInstance) {
         password,
         accountType,
         organization,
+        university,
         idCard,
         passportId,
         pharmacyLicenseId,
         country,
         phone,
         recaptchaToken,
+        source,
+        eventCode,
       } = result.data;
 
       // Verify reCAPTCHA if enabled
@@ -195,13 +202,15 @@ export async function authRoutes(fastify: FastifyInstance) {
       // 6. Determine role & country
       const role = roleMapping[accountType];
       const userCountry =
-        accountType === "thaiStudent" || accountType === "thaiProfessional"
+        accountType === "thaiStudent" || accountType === "thaiProfessional" || accountType === "generalPublic"
           ? "Thailand"
           : country;
 
-      // Auto-approve professionals
-      const initialStatus =
-        role === "thpro" || role === "interpro" ? "active" : "pending_approval";
+      // Determine auto-approval based on source and role
+      const isConferenceWeb = source === "conference-web";
+      const isAutoApprovedRole = role === "thpro" || role === "interpro" || role === "general";
+      
+      const initialStatus = isConferenceWeb || isAutoApprovedRole ? "active" : "pending_approval";
 
       // 7. Insert user
       const [newUser] = await db
@@ -214,6 +223,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           lastName,
           country: userCountry,
           institution: organization || null,
+          university: university || null,
           phone: phone || null,
           thaiIdCard: idCard || null,
           passportId: passportId || null,
@@ -223,29 +233,63 @@ export async function authRoutes(fastify: FastifyInstance) {
         })
         .returning();
 
-      // 8. Send auto-reply email based on role
-      if (role === "thstd" || role === "interstd") {
-        // Send pending approval email for students
-        try {
-          await sendPendingApprovalEmail(email, firstName, lastName);
-          fastify.log.info(`Pending approval email sent to ${email}`);
-        } catch (emailError) {
-          // Log error but don't fail registration
-          fastify.log.error({ err: emailError }, "Failed to send pending approval email");
+      // 8. Send auto-reply emails
+      // ACCP (conference-web) → hardcoded ACCP templates
+      // Other sources → generic conference-hub templates (requires eventCode)
+      const isAccp = !source || source === "conference-web";
+
+      if (isAccp) {
+        // Use legacy ACCP-specific emails
+        if (initialStatus === "active") {
+          try {
+            await sendSignupNotificationEmail(email, firstName, lastName);
+            fastify.log.info(`Signup notification email sent to ${email}`);
+          } catch (emailError) {
+            fastify.log.error({ err: emailError }, "Failed to send signup notification email");
+          }
+        } else {
+          try {
+            await sendPendingApprovalEmail(email, firstName, lastName);
+            fastify.log.info(`Pending approval email sent to ${email}`);
+          } catch (emailError) {
+            fastify.log.error({ err: emailError }, "Failed to send pending approval email");
+          }
         }
-      } else if (role === "thpro" || role === "interpro") {
-        // Send signup notification email for professionals (non-students)
+      } else if (eventCode) {
+        // Use generic conference-hub templates with event context
         try {
-          await sendSignupNotificationEmail(email, firstName, lastName);
-          fastify.log.info(`Signup notification email sent to ${email}`);
+          const [eventRow] = await db
+            .select()
+            .from(events)
+            .where(eq(events.eventCode, eventCode))
+            .limit(1);
+
+          if (eventRow) {
+            const ctx = buildEventEmailContext(eventRow);
+            if (initialStatus === "active") {
+              await sendEventSignupNotificationEmail(email, firstName, lastName, ctx);
+              fastify.log.info(`[Generic] Signup email sent to ${email} for ${eventCode}`);
+            } else {
+              await sendEventPendingApprovalEmail(email, firstName, lastName, ctx);
+              fastify.log.info(`[Generic] Pending approval email sent to ${email} for ${eventCode}`);
+            }
+          } else {
+            fastify.log.warn(`Event not found for eventCode=${eventCode}, skipping signup email`);
+          }
         } catch (emailError) {
-          // Log error but don't fail registration
-          fastify.log.error({ err: emailError }, "Failed to send signup notification email");
+          fastify.log.error({ err: emailError }, `Failed to send generic signup email for ${eventCode}`);
         }
       }
 
+      // 9. Sign JWT token so client can auto-login without a separate /auth/login call
+      const token = fastify.jwt.sign(
+        { id: newUser.id, email: newUser.email, role: newUser.role },
+        { expiresIn: JWT_EXPIRY }
+      );
+
       return reply.status(201).send({
         success: true,
+        token,
         user: {
           id: newUser.id,
           email: newUser.email,
@@ -253,6 +297,10 @@ export async function authRoutes(fastify: FastifyInstance) {
           lastName: newUser.lastName,
           role: newUser.role,
           status: newUser.status,
+          institution: newUser.institution,
+          university: newUser.university,
+          phone: newUser.phone,
+          pharmacyLicenseId: newUser.pharmacyLicenseId,
         },
       });
     } catch (error) {

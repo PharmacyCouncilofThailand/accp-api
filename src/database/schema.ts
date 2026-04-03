@@ -21,6 +21,7 @@ export const userRoleEnum = pgEnum("user_role", [
   "interstd",
   "thpro",
   "interpro",
+  "general",
 ]);
 export const accountStatusEnum = pgEnum("account_status", [
   "pending_approval",
@@ -107,6 +108,7 @@ export const users = pgTable("users", {
   phone: varchar("phone", { length: 20 }),
   country: varchar("country", { length: 100 }),
   institution: varchar("institution", { length: 255 }),
+  university: varchar("university", { length: 255 }),
   thaiIdCard: varchar("thai_id_card", { length: 13 }).unique(),
   passportId: varchar("passport_id", { length: 20 }).unique(),
   pharmacyLicenseId: varchar("pharmacy_license_id", { length: 20 }).unique(),
@@ -129,6 +131,23 @@ export const passwordResetTokens = pgTable("password_reset_tokens", {
   expiresAt: timestamp("expires_at").notNull(),
   usedAt: timestamp("used_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// --------------------------------------------------------------------------
+// 2A2. SSO TOKENS (One-Time Token for cross-app SSO)
+// --------------------------------------------------------------------------
+export const ssoTokens = pgTable("sso_tokens", {
+  id: serial("id").primaryKey(),
+  token: varchar("token", { length: 255 }).notNull().unique(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  eventId: integer("event_id").references(() => events.id, { onDelete: "set null" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  used: boolean("used").default(false).notNull(),
+  sourceApp: varchar("source_app", { length: 50 }).notNull(),
+  targetApp: varchar("target_app", { length: 50 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 // --------------------------------------------------------------------------
@@ -172,9 +191,16 @@ export const events = pgTable("events", {
   cpeCredits: decimal("cpe_credits", { precision: 5, scale: 2 }).default("0"),
   status: eventStatusEnum("status").notNull().default("draft"),
   imageUrl: varchar("image_url", { length: 500 }),
-  mapUrl: varchar("map_url", { length: 500 }),
+  coverImage: varchar("cover_image", { length: 500 }),
+  videoUrl: varchar("video_url", { length: 2000 }),
+  mapUrl: varchar("map_url", { length: 2000 }),
+  websiteUrl: varchar("website_url", { length: 500 }),
+  shortName: varchar("short_name", { length: 100 }),
   abstractStartDate: timestamp("abstract_start_date"),
   abstractEndDate: timestamp("abstract_end_date"),
+  documents: jsonb("documents")
+    .$type<{ name: string; url: string }[]>()
+    .default([]),
   createdBy: integer("created_by").references(() => users.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -348,6 +374,7 @@ export const orders = pgTable("orders", {
   userId: integer("user_id")
     .notNull()
     .references(() => users.id),
+  eventId: integer("event_id").references(() => events.id),
   orderNumber: varchar("order_number", { length: 50 }).notNull().unique(),
   subtotalAmount: decimal("subtotal_amount", { precision: 10, scale: 2 }),
   discountAmount: decimal("discount_amount", { precision: 10, scale: 2 }).default("0"),

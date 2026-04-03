@@ -43,3 +43,13 @@ export const updateUserSchema = z.object({
 export const assignEventSchema = z.object({
   eventIds: z.array(z.number()),
 });
+
+// New: assign events with optional session-level granularity
+export const assignEventsAndSessionsSchema = z.object({
+  assignments: z.array(
+    z.object({
+      eventId: z.number(),
+      sessionIds: z.array(z.number()).optional(), // empty/omitted = whole event
+    })
+  ),
+});

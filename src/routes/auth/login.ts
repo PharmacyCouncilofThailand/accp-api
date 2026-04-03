@@ -19,7 +19,7 @@ export default async function (fastify: FastifyInstance) {
       });
     }
 
-    const { email, password, recaptchaToken } = result.data;
+    const { email, pharmacyLicenseId, password, recaptchaToken } = result.data;
 
     // Verify reCAPTCHA if enabled
     if (isRecaptchaEnabled()) {
@@ -40,12 +40,15 @@ export default async function (fastify: FastifyInstance) {
     }
 
     try {
-      // 2. Find user
-      const userList = await db
-        .select()
-        .from(users)
-        .where(eq(users.email, email))
-        .limit(1);
+      // 2. Find user (by email OR pharmacyLicenseId based on what is provided)
+      let userQuery = db.select().from(users);
+      if (email) {
+        userQuery = userQuery.where(eq(users.email, email)) as any;
+      } else if (pharmacyLicenseId) {
+        userQuery = userQuery.where(eq(users.pharmacyLicenseId, pharmacyLicenseId)) as any;
+      }
+
+      const userList = await userQuery.limit(1);
 
       if (userList.length === 0) {
         return reply.status(401).send({
@@ -69,16 +72,16 @@ export default async function (fastify: FastifyInstance) {
       // 4. Check account status
       if (user.status === 'pending_approval') {
         return reply.status(403).send({
-            success: false,
-            error: "ACCOUNT_PENDING",
+          success: false,
+          error: "ACCOUNT_PENDING",
         });
       }
 
       if (user.status === 'rejected') {
         return reply.status(403).send({
-            success: false,
-            error: "ACCOUNT_REJECTED",
-            rejectionReason: user.rejectionReason,
+          success: false,
+          error: "ACCOUNT_REJECTED",
+          rejectionReason: user.rejectionReason,
         });
       }
 
@@ -131,6 +134,11 @@ export default async function (fastify: FastifyInstance) {
           delegateType,
           isThai: isThai,
           idCard: user.thaiIdCard,
+          phone: user.phone,
+          institution: user.institution,
+          university: user.university,
+          pharmacyLicenseId: user.pharmacyLicenseId,
+          name: `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email,
         },
       });
 

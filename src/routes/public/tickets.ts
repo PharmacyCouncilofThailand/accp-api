@@ -110,7 +110,7 @@ export default async function publicTicketsRoutes(fastify: FastifyInstance) {
                 
                 // Check if ticket is available
                 const isInSalePeriod = (!saleStart || now >= saleStart) && (!saleEnd || now <= saleEnd);
-                const hasQuota = ticket.quota > ticket.soldCount;
+                const hasQuota = ticket.quota === 0 || ticket.quota > ticket.soldCount;
                 const isAvailable = isInSalePeriod && hasQuota;
 
                 return {

@@ -14,11 +14,17 @@ export default async function (fastify: FastifyInstance) {
         .select({
           id: users.id,
           email: users.email,
+          role: users.role,
           firstName: users.firstName,
           lastName: users.lastName,
           phone: users.phone,
           country: users.country,
           institution: users.institution,
+          university: users.university,
+          thaiIdCard: users.thaiIdCard,
+          passportId: users.passportId,
+          pharmacyLicenseId: users.pharmacyLicenseId,
+          status: users.status,
         })
         .from(users)
         .where(eq(users.id, request.user.id))
