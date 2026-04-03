@@ -68,7 +68,11 @@ fastify.register(jwt, {
 // ============================================================================
 const publicPath = path.join(__dirname, '..', 'public');
 if (!fs.existsSync(publicPath)) {
-  fs.mkdirSync(publicPath, { recursive: true });
+  try {
+    fs.mkdirSync(publicPath, { recursive: true });
+  } catch (err) {
+    console.warn(`⚠️ Could not create public directory at ${publicPath}:`, (err as Error).message);
+  }
 }
 fastify.register(fastifyStatic, {
   root: publicPath,
