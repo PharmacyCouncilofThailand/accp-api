@@ -1,31 +1,42 @@
 /**
- * reCAPTCHA v2 Verification Utility
+ * Cloudflare Turnstile Verification Utility
+ * (Replaces Google reCAPTCHA v2 — works in China and worldwide)
  */
 
-interface RecaptchaResponse {
+interface TurnstileResponse {
   success: boolean;
   challenge_ts?: string;
   hostname?: string;
   "error-codes"?: string[];
+  action?: string;
+  cdata?: string;
 }
 
 /**
- * Verify reCAPTCHA v2 token with Google
- * @param token - The reCAPTCHA token from client
+ * Get the Turnstile secret key from environment.
+ * Supports TURNSTILE_SECRET_KEY (preferred) with RECAPTCHA_SECRET_KEY as fallback.
+ */
+function getSecretKey(): string | undefined {
+  return process.env.TURNSTILE_SECRET_KEY || process.env.RECAPTCHA_SECRET_KEY;
+}
+
+/**
+ * Verify Cloudflare Turnstile token
+ * @param token - The Turnstile token from client
  * @returns true if verification passes, false otherwise
  */
 export async function verifyRecaptcha(token: string): Promise<boolean> {
-  const secretKey = process.env.RECAPTCHA_SECRET_KEY;
+  const secretKey = getSecretKey();
 
   // If no secret key configured, skip verification (for development)
   if (!secretKey) {
-    console.warn("RECAPTCHA_SECRET_KEY not configured - skipping verification");
+    console.warn("TURNSTILE_SECRET_KEY not configured - skipping verification");
     return true;
   }
 
   try {
     const response = await fetch(
-      "https://www.google.com/recaptcha/api/siteverify",
+      "https://challenges.cloudflare.com/turnstile/v0/siteverify",
       {
         method: "POST",
         headers: {
@@ -35,23 +46,22 @@ export async function verifyRecaptcha(token: string): Promise<boolean> {
       }
     );
 
-    const data = (await response.json()) as RecaptchaResponse;
+    const data = (await response.json()) as TurnstileResponse;
 
     if (!data.success) {
-      console.warn("reCAPTCHA verification failed:", data["error-codes"]);
+      console.warn("Turnstile verification failed:", data["error-codes"]);
     }
 
     return data.success;
   } catch (error) {
-    console.error("reCAPTCHA verification error:", error);
+    console.error("Turnstile verification error:", error);
     return false;
   }
 }
 
 /**
- * Check if reCAPTCHA verification is enabled
+ * Check if CAPTCHA verification is enabled
  */
 export function isRecaptchaEnabled(): boolean {
-  // Enable when secret key is configured (both dev and prod)
-  return !!process.env.RECAPTCHA_SECRET_KEY;
+  return !!getSecretKey();
 }
