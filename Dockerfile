@@ -50,9 +50,13 @@ COPY --from=builder /app/src/database/schema.ts ./src/database/schema.ts
 # Install production dependencies only
 RUN npm install --legacy-peer-deps --omit=dev
 
+# Create public directory for uploads (before switching to non-root user)
+RUN mkdir -p /app/public/uploads
+
 # Create non-root user for security
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 api
+RUN chown -R api:nodejs /app/public
 USER api
 
 EXPOSE 3002
