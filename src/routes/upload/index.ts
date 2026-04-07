@@ -221,6 +221,87 @@ export async function uploadRoutes(fastify: FastifyInstance) {
   });
 
   /**
+   * GET /upload/download
+   * Force-download a file. Supports both local uploads and Google Drive URLs.
+   * Query params: url (the stored file URL), name (desired filename)
+   */
+  fastify.get("/download", async (request, reply) => {
+    const { url, name } = request.query as { url?: string; name?: string };
+    if (!url) {
+      return reply.status(400).send({ error: "Missing url parameter" });
+    }
+
+    const filename = name || "download";
+
+    try {
+      // Check if it's a Google Drive URL
+      const fileId = extractFileIdFromUrl(url);
+      if (fileId) {
+        // Google Drive file — proxy via Drive API
+        const { stream, mimeType } = await getFileStream(fileId);
+        reply.header("Content-Type", mimeType);
+        reply.header("Content-Disposition", `attachment; filename="${encodeURIComponent(filename)}"`);
+        return reply.send(stream);
+      }
+
+      // Local file — extract path from URL
+      const uploadsMatch = url.match(/\/public\/uploads\/(.+)$/);
+      if (uploadsMatch) {
+        const relativePath = uploadsMatch[1];
+        // Sanitize each segment
+        const segments = relativePath.split("/").map(s => path.basename(s));
+        const filePath = path.join(process.cwd(), "public", "uploads", ...segments);
+
+        try {
+          await fs.access(filePath);
+        } catch {
+          return reply.status(404).send({ error: "File not found" });
+        }
+
+        const fileBuffer = await fs.readFile(filePath);
+        const ext = path.extname(filename).toLowerCase();
+        const mimeMap: Record<string, string> = {
+          ".pdf": "application/pdf",
+          ".doc": "application/msword",
+          ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          ".xls": "application/vnd.ms-excel",
+          ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          ".png": "image/png",
+          ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg",
+        };
+        const mimeType = mimeMap[ext] || "application/octet-stream";
+
+        reply.header("Content-Type", mimeType);
+        reply.header("Content-Disposition", `attachment; filename="${encodeURIComponent(filename)}"`);
+        return reply.send(fileBuffer);
+      }
+
+      return reply.status(400).send({ error: "Unsupported URL format" });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ error: "Failed to download file" });
+    }
+  });
+
+  /**
+   * POST /upload/session-document
+   * Upload session document (workshop materials) to Google Drive (session_documents folder)
+   */
+  fastify.post("/session-document", { preHandler: [fastify.authenticate] }, async (request, reply) => {
+    try {
+      const result = await handleFileUpload(request, "session_documents");
+      return reply.status(result.status).send(result);
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: "Failed to upload session document",
+      });
+    }
+  });
+
+  /**
    * POST /upload/event-media
    * Upload event media (thumbnail, cover image, cover video, venue image, document)
    * to per-event Google Drive folder structure.

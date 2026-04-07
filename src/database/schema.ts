@@ -221,6 +221,9 @@ export const sessions = pgTable("sessions", {
   endTime: timestamp("end_time").notNull(),
   maxCapacity: integer("max_capacity").default(100),
   agenda: jsonb("agenda").$type<{ time: string; topic: string }[]>(),
+  documents: jsonb("documents")
+    .$type<{ name: string; url: string }[]>()
+    .default([]),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

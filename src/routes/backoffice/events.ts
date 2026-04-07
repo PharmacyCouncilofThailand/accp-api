@@ -523,6 +523,7 @@ export default async function (fastify: FastifyInstance) {
             endTime: new Date(data.endTime),
             maxCapacity: data.maxCapacity,
             agenda: data.agenda ?? null,
+            documents: data.documents ?? [],
           })
           .returning();
 
@@ -533,7 +534,7 @@ export default async function (fastify: FastifyInstance) {
               eventId: parseInt(eventId),
               sessionId: session.id,
               speakerId: sid,
-              speakerType: "guest" as const, // Default to guest, can be updated later if needed
+              speakerType: "guest" as const,
               sortOrder: 0,
             })),
           );

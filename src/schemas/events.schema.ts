@@ -46,6 +46,10 @@ export const createSessionSchema = z.object({
         time: z.string().min(1),
         topic: z.string().min(1),
     })).optional().nullable(),
+    documents: z.array(z.object({
+        name: z.string().min(1),
+        url: z.string().min(1),
+    })).optional().default([]),
 });
 
 export const updateSessionSchema = createSessionSchema.partial();

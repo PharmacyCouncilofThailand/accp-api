@@ -57,6 +57,13 @@
       "when": 1773022643017,
       "tag": "0007_serious_marvel_zombies",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1775552130945,
+      "tag": "0008_whole_agent_brand",
+      "breakpoints": true
     }
   ]
 }
