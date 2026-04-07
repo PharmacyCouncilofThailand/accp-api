@@ -1,6 +1,6 @@
 {
-  "id": "fec3f361-0a3c-44bf-b75f-3b8581ee3a20",
-  "prevId": "e07be92e-91a9-42ce-a7b1-41a6810f4e83",
+  "id": "01fc54b1-1b07-4629-93bd-1a3823f0b910",
+  "prevId": "fec3f361-0a3c-44bf-b75f-3b8581ee3a20",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -846,9 +846,27 @@
           "primaryKey": false,
           "notNull": false
         },
+        "video_url": {
+          "name": "video_url",
+          "type": "varchar(2000)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "map_url": {
           "name": "map_url",
+          "type": "varchar(2000)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "website_url": {
+          "name": "website_url",
           "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "short_name": {
+          "name": "short_name",
+          "type": "varchar(100)",
           "primaryKey": false,
           "notNull": false
         },
@@ -863,6 +881,13 @@
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
+        },
+        "documents": {
+          "name": "documents",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'[]'::jsonb"
         },
         "created_by": {
           "name": "created_by",
@@ -1028,6 +1053,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "event_id": {
+          "name": "event_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "order_number": {
           "name": "order_number",
           "type": "varchar(50)",
@@ -1169,6 +1200,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "orders_event_id_events_id_fk": {
+          "name": "orders_event_id_events_id_fk",
+          "tableFrom": "orders",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
           ],
           "columnsTo": [
             "id"
@@ -2273,6 +2317,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "documents": {
+          "name": "documents",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'[]'::jsonb"
+        },
         "is_active": {
           "name": "is_active",
           "type": "boolean",
@@ -2375,6 +2426,110 @@
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.sso_tokens": {
+      "name": "sso_tokens",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "token": {
+          "name": "token",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "event_id": {
+          "name": "event_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "used": {
+          "name": "used",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "source_app": {
+          "name": "source_app",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_app": {
+          "name": "target_app",
+          "type": "varchar(50)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "sso_tokens_user_id_users_id_fk": {
+          "name": "sso_tokens_user_id_users_id_fk",
+          "tableFrom": "sso_tokens",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "sso_tokens_event_id_events_id_fk": {
+          "name": "sso_tokens_event_id_events_id_fk",
+          "tableFrom": "sso_tokens",
+          "tableTo": "events",
+          "columnsFrom": [
+            "event_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "sso_tokens_token_unique": {
+          "name": "sso_tokens_token_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "token"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -2744,6 +2899,12 @@
         },
         "institution": {
           "name": "institution",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "university": {
+          "name": "university",
           "type": "varchar(255)",
           "primaryKey": false,
           "notNull": false
