@@ -14,8 +14,10 @@ import {
   passwordResetTokens,
   verificationRejectionHistory,
 } from "../../database/schema.js";
-import { eq, desc, ilike, or, count, and, SQL, inArray, exists } from "drizzle-orm";
+import { eq, desc, ilike, or, count, and, SQL, inArray, exists, ne } from "drizzle-orm";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
+import { BCRYPT_ROUNDS } from "../../constants/auth.js";
 
 // Query schema for listing members
 const listMembersQuerySchema = z.object({
@@ -192,6 +194,152 @@ export default async function (fastify: FastifyInstance) {
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: "Failed to fetch stats" });
+    }
+  });
+
+  // Create Member
+  fastify.post("", async (request, reply) => {
+    const createSchema = z.object({
+      email: z.string().email(),
+      password: z.string().min(6),
+      firstName: z.string().min(1).max(100),
+      lastName: z.string().min(1).max(100),
+      role: z.enum(["thstd", "interstd", "thpro", "interpro", "general", "admin"]),
+      status: z.enum(["pending_approval", "active", "rejected"]).default("active"),
+      phone: z.string().max(20).optional().nullable(),
+      country: z.string().max(100).optional().nullable(),
+      institution: z.string().max(255).optional().nullable(),
+      university: z.string().max(255).optional().nullable(),
+      thaiIdCard: z.string().max(13).optional().nullable(),
+      passportId: z.string().max(20).optional().nullable(),
+      pharmacyLicenseId: z.string().max(20).optional().nullable(),
+    });
+
+    const parsed = createSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Invalid data", details: parsed.error.flatten() });
+    }
+
+    const { password, ...data } = parsed.data;
+
+    try {
+      // Check duplicate email
+      const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, data.email));
+      if (existing) {
+        return reply.status(409).send({ error: "Email already exists" });
+      }
+
+      const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+
+      const [member] = await db
+        .insert(users)
+        .values({
+          ...data,
+          passwordHash,
+          phone: data.phone ?? null,
+          country: data.country ?? null,
+          institution: data.institution ?? null,
+          university: data.university ?? null,
+          thaiIdCard: data.thaiIdCard ?? null,
+          passportId: data.passportId ?? null,
+          pharmacyLicenseId: data.pharmacyLicenseId ?? null,
+        })
+        .returning({
+          id: users.id,
+          email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          role: users.role,
+          status: users.status,
+          phone: users.phone,
+          country: users.country,
+          institution: users.institution,
+          createdAt: users.createdAt,
+        });
+
+      return reply.status(201).send({ member });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ error: "Failed to create member" });
+    }
+  });
+
+  // Update Member
+  fastify.patch("/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const userId = parseInt(id);
+
+    const updateSchema = z.object({
+      email: z.string().email().optional(),
+      password: z.string().min(6).optional(),
+      firstName: z.string().min(1).max(100).optional(),
+      lastName: z.string().min(1).max(100).optional(),
+      role: z.enum(["thstd", "interstd", "thpro", "interpro", "general", "admin"]).optional(),
+      status: z.enum(["pending_approval", "active", "rejected"]).optional(),
+      phone: z.string().max(20).optional().nullable(),
+      country: z.string().max(100).optional().nullable(),
+      institution: z.string().max(255).optional().nullable(),
+      university: z.string().max(255).optional().nullable(),
+      thaiIdCard: z.string().max(13).optional().nullable(),
+      passportId: z.string().max(20).optional().nullable(),
+      pharmacyLicenseId: z.string().max(20).optional().nullable(),
+    });
+
+    const parsed = updateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Invalid data", details: parsed.error.flatten() });
+    }
+
+    try {
+      // Check if user exists
+      const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.id, userId));
+      if (!existing) {
+        return reply.status(404).send({ error: "Member not found" });
+      }
+
+      // Check duplicate email if email is being changed
+      if (parsed.data.email) {
+        const [emailExists] = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.email, parsed.data.email), ne(users.id, userId)));
+        if (emailExists) {
+          return reply.status(409).send({ error: "Email already exists" });
+        }
+      }
+
+      const { password, ...updateFields } = parsed.data;
+      const updateData: Record<string, unknown> = { ...updateFields };
+
+      if (password) {
+        updateData.passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+      }
+
+      const [member] = await db
+        .update(users)
+        .set(updateData)
+        .where(eq(users.id, userId))
+        .returning({
+          id: users.id,
+          email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          role: users.role,
+          status: users.status,
+          phone: users.phone,
+          country: users.country,
+          institution: users.institution,
+          university: users.university,
+          thaiIdCard: users.thaiIdCard,
+          passportId: users.passportId,
+          pharmacyLicenseId: users.pharmacyLicenseId,
+          createdAt: users.createdAt,
+        });
+
+      return reply.send({ member });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ error: "Failed to update member" });
     }
   });
 

@@ -806,34 +806,39 @@ async function processSuccessfulPayment(
 
       if (!ticket || ticket.eventId !== orderEventId) {
         fastify.log.error(
-          `Ticket ${item.ticketTypeId} is outside order event scope for order ${orderId}: orderEventId=${orderEventId}, ticketEventId=${ticket?.eventId ?? "null"}`
+          `[PROCESS-PAYMENT] Skipping item: ticket ${item.ticketTypeId} is outside order event scope (order ${orderId}, orderEventId=${orderEventId}, ticketEventId=${ticket?.eventId ?? "null"})`
         );
-        return null;
+        continue;
       }
 
       // Determine which session(s) to link
       let sessionIdsToLink: number[] = [];
 
-      if (
-        item.itemType === "addon" &&
-        ticket?.groupName?.toLowerCase() === "workshop" &&
-        workshopSessionId
-      ) {
-        // Workshop addon → user chose a specific session
-        const [workshopSession] = await tx
-          .select({ id: sessions.id })
-          .from(sessions)
-          .where(and(eq(sessions.id, workshopSessionId), eq(sessions.eventId, orderEventId)))
+      // Check if this addon item is THE workshop the user chose.
+      // Use ticketSessions junction as source of truth (more reliable than groupName string match).
+      let isUserChosenWorkshop = false;
+      if (item.itemType === "addon" && workshopSessionId) {
+        const [linkedWorkshop] = await tx
+          .select({ id: ticketSessions.id })
+          .from(ticketSessions)
+          .innerJoin(sessions, eq(ticketSessions.sessionId, sessions.id))
+          .where(
+            and(
+              eq(ticketSessions.ticketTypeId, item.ticketTypeId),
+              eq(ticketSessions.sessionId, workshopSessionId),
+              eq(sessions.eventId, orderEventId)
+            )
+          )
           .limit(1);
+        isUserChosenWorkshop = !!linkedWorkshop;
+      }
 
-        if (!workshopSession) {
-          fastify.log.error(
-            `Workshop session ${workshopSessionId} is outside event ${orderEventId} for order ${orderId}`
-          );
-          return null;
-        }
-
-        sessionIdsToLink = [workshopSessionId];
+      if (isUserChosenWorkshop) {
+        // User explicitly chose this workshop session at checkout
+        sessionIdsToLink = [workshopSessionId!];
+        fastify.log.info(
+          `[PROCESS-PAYMENT] Order ${orderId} item ${item.id} (ticket ${item.ticketTypeId}) → linking user-chosen workshop session ${workshopSessionId}`
+        );
       } else {
         // Primary or other addon → lookup sessions from ticketSessions junction
         const linkedSessions = await tx
