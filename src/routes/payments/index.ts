@@ -1355,6 +1355,45 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               receiptUrl = `${apiBaseUrl}/api/payments/receipt/${receiptToken}`;
             }
 
+            // Fetch all paid orders for this user+event (initial + addon purchases)
+            const paidOrdersRaw = await db
+              .select({
+                id: orders.id,
+                orderNumber: orders.orderNumber,
+                totalAmount: orders.totalAmount,
+                currency: orders.currency,
+                createdAt: orders.createdAt,
+                paidAt: payments.paidAt,
+              })
+              .from(orders)
+              .leftJoin(payments, eq(payments.orderId, orders.id))
+              .where(
+                and(
+                  eq(orders.userId, userId),
+                  eq(orders.eventId, reg.eventId),
+                  eq(orders.status, "paid")
+                )
+              )
+              .orderBy(desc(orders.createdAt));
+
+            // Deduplicate by orderId (in case of multiple payment rows per order)
+            const orderSeen = new Set<number>();
+            const receipts = paidOrdersRaw
+              .filter((o) => {
+                if (orderSeen.has(o.id)) return false;
+                orderSeen.add(o.id);
+                return true;
+              })
+              .map((o) => ({
+                orderId: o.id,
+                orderNumber: o.orderNumber,
+                totalAmount: o.totalAmount,
+                currency: o.currency,
+                purchasedAt: o.createdAt?.toISOString() || null,
+                paidAt: o.paidAt?.toISOString() || null,
+                receiptUrl: `${apiBaseUrl}/api/payments/receipt/${generateReceiptToken(o.id)}`,
+              }));
+
             return {
               regCode: reg.regCode,
               eventId: reg.eventId,
@@ -1374,6 +1413,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               currency: reg.ticketCurrency,
               includes: Array.isArray(reg.ticketFeatures) ? reg.ticketFeatures : [],
               receiptUrl,
+              receipts,
               galaTicket: galaRow
                 ? {
                     id: `${reg.regCode}-GALA`,

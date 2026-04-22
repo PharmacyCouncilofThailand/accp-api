@@ -50,6 +50,9 @@ COPY --from=builder /app/src/database/schema.ts ./src/database/schema.ts
 # Install production dependencies only
 RUN npm install --legacy-peer-deps --omit=dev
 
+# Copy font files for PDF receipt generation (PDFKit)
+COPY --from=builder /app/public/Font ./public/Font
+
 # Create public directory for uploads (before switching to non-root user)
 RUN mkdir -p /app/public/uploads
 
