@@ -4,6 +4,7 @@ import { users, verificationRejectionHistory, backofficeUsers } from "../../data
 import { eq, desc, isNotNull, ilike, or, count, and, SQL } from "drizzle-orm";
 import z from "zod";
 import { sendVerificationApprovedEmail, sendVerificationRejectedEmail } from "../../services/emailService.js";
+import { getFullName } from "../../utils/name.js";
 
 const rejectSchema = z.object({
   reason: z.string().min(1, "Reason is required"),
@@ -49,6 +50,7 @@ export default async function (fastify: FastifyInstance) {
         conditions.push(
           or(
             ilike(users.firstName, `%${search}%`),
+            ilike(users.middleName, `%${search}%`),
             ilike(users.lastName, `%${search}%`),
             ilike(users.email, `%${search}%`),
             ilike(users.thaiIdCard, `%${search}%`),
@@ -77,7 +79,7 @@ export default async function (fastify: FastifyInstance) {
       /* Map to Verification interface expected by frontend */
       const verifications = usersWithDocs.map((user) => ({
         id: user.id.toString(),
-        name: `${user.firstName} ${user.lastName}`,
+        name: getFullName(user.firstName, user.middleName, user.lastName),
         email: user.email,
         university: user.institution || "N/A",
         studentId: user.thaiIdCard || user.passportId || "N/A",
@@ -181,6 +183,7 @@ export default async function (fastify: FastifyInstance) {
         await sendVerificationRejectedEmail(
           updatedUser.email,
           updatedUser.firstName,
+          updatedUser.middleName,
           updatedUser.lastName,
           result.data.reason
         );

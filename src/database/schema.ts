@@ -104,6 +104,7 @@ export const users = pgTable("users", {
   passwordHash: varchar("password_hash", { length: 255 }).notNull(),
   role: userRoleEnum("role").notNull(),
   firstName: varchar("first_name", { length: 100 }).notNull(),
+  middleName: varchar("middle_name", { length: 100 }),
   lastName: varchar("last_name", { length: 100 }).notNull(),
   phone: varchar("phone", { length: 20 }),
   country: varchar("country", { length: 100 }),
@@ -418,6 +419,7 @@ export const registrations = pgTable("registrations", {
   userId: integer("user_id").references(() => users.id),
   email: varchar("email", { length: 255 }).notNull(),
   firstName: varchar("first_name", { length: 100 }).notNull(),
+  middleName: varchar("middle_name", { length: 100 }),
   lastName: varchar("last_name", { length: 100 }).notNull(),
   dietaryRequirements: varchar("dietary_requirements", { length: 255 }),
   status: registrationStatusEnum("status").notNull().default("confirmed"),
@@ -563,6 +565,7 @@ export const abstractCoAuthors = pgTable("abstract_co_authors", {
     .notNull()
     .references(() => abstracts.id, { onDelete: "cascade" }),
   firstName: varchar("first_name", { length: 100 }).notNull(),
+  middleName: varchar("middle_name", { length: 100 }),
   lastName: varchar("last_name", { length: 100 }).notNull(),
   email: varchar("email", { length: 255 }).notNull(),
   institution: varchar("institution", { length: 255 }),

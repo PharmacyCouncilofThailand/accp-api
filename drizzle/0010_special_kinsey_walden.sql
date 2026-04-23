@@ -1,0 +1,1 @@
+ALTER TABLE "abstract_co_authors" ADD COLUMN "middle_name" varchar(100);

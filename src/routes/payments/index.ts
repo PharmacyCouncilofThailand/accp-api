@@ -50,6 +50,7 @@ import {
 import { generateReceiptToken, verifyReceiptToken } from "../../utils/receiptToken.js";
 import { generateReceiptPdf } from "../../services/receiptPdf.js";
 import { sendPaymentReceiptEmail } from "../../services/emailService.js";
+import { getFullName } from "../../utils/name.js";
 import { validatePromoCode, reservePromoUsage, settlePromoUsageSuccess, cancelPromoUsage } from "../../utils/promoEngine.js";
 
 // ─────────────────────────────────────────────────────
@@ -649,7 +650,7 @@ async function processSuccessfulPayment(
     taxPostalCode: string | null;
     taxFullAddress: string | null;
   };
-  user: { email: string; firstName: string; lastName: string };
+  user: { email: string; firstName: string; middleName: string | null; lastName: string };
   regCode: string;
 } | null> {
   return await db.transaction(async (tx) => {
@@ -690,6 +691,7 @@ async function processSuccessfulPayment(
       .select({
         email: users.email,
         firstName: users.firstName,
+        middleName: users.middleName,
         lastName: users.lastName,
       })
       .from(users)
@@ -788,6 +790,7 @@ async function processSuccessfulPayment(
         userId: order.userId,
         email: user.email,
         firstName: user.firstName,
+        middleName: user.middleName,
         lastName: user.lastName,
         status: "confirmed",
       }).returning();
@@ -1111,6 +1114,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                 await sendPaymentReceiptEmail(
                   user.email,
                   user.firstName,
+                  user.middleName,
                   user.lastName,
                   order.orderNumber,
                   new Date(),
@@ -2017,6 +2021,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               await sendPaymentReceiptEmail(
                 result.user.email,
                 result.user.firstName,
+                result.user.middleName,
                 result.user.lastName,
                 order.orderNumber,
                 new Date(),
@@ -2104,6 +2109,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             email: users.email,
             phone: users.phone,
             firstName: users.firstName,
+            middleName: users.middleName,
             lastName: users.lastName,
           })
           .from(users)
@@ -2513,6 +2519,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               await sendPaymentReceiptEmail(
                 user.email,
                 user.firstName,
+                user.middleName,
                 user.lastName,
                 order.orderNumber,
                 new Date(),
@@ -2711,6 +2718,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               await sendPaymentReceiptEmail(
                 user.email,
                 user.firstName,
+                user.middleName,
                 user.lastName,
                 order.orderNumber,
                 new Date(),
@@ -3056,6 +3064,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           .select({
             email: users.email,
             firstName: users.firstName,
+            middleName: users.middleName,
             lastName: users.lastName,
           })
           .from(users)
@@ -3068,6 +3077,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               await sendPaymentReceiptEmail(
                 verifyUser.email,
                 verifyUser.firstName,
+                verifyUser.middleName,
                 verifyUser.lastName,
                 order.orderNumber,
                 new Date(),
@@ -3431,6 +3441,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           .select({
             email: users.email,
             firstName: users.firstName,
+            middleName: users.middleName,
             lastName: users.lastName,
           })
           .from(users)
@@ -3496,7 +3507,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           promoCode: order.promoCode,
           fee: fee > 0 ? fee : 0,
           total,
-          customerName: `${user.firstName} ${user.lastName}`,
+          customerName: getFullName(user.firstName, user.middleName, user.lastName),
           customerEmail: user.email,
           taxInvoice: order.needTaxInvoice
             ? {

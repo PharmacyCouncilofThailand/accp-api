@@ -10,6 +10,7 @@ import {
 } from "../../database/schema.js";
 import { checkinListSchema, createCheckinSchema, checkinStatsSchema, undoCheckinSchema } from "../../schemas/checkins.schema.js";
 import { eq, desc, ilike, and, or, count, isNotNull, isNull, sql } from "drizzle-orm";
+import { getFullName } from "../../utils/name.js";
 
 export default async function (fastify: FastifyInstance) {
     // List Check-ins (reads from registration_sessions WHERE checkedInAt IS NOT NULL)
@@ -30,6 +31,7 @@ export default async function (fastify: FastifyInstance) {
                 conditions.push(
                     or(
                         ilike(registrations.firstName, `%${search}%`),
+                        ilike(registrations.middleName, `%${search}%`),
                         ilike(registrations.lastName, `%${search}%`),
                         ilike(registrations.regCode, `%${search}%`)
                     )
@@ -52,6 +54,7 @@ export default async function (fastify: FastifyInstance) {
                     scannedAt: registrationSessions.checkedInAt,
                     regCode: registrations.regCode,
                     firstName: registrations.firstName,
+                    middleName: registrations.middleName,
                     lastName: registrations.lastName,
                     email: registrations.email,
                     ticketName: ticketTypes.name,
@@ -230,6 +233,7 @@ export default async function (fastify: FastifyInstance) {
                         registration: {
                             regCode: registration.regCode,
                             firstName: registration.firstName,
+                            middleName: (registration as any).middleName,
                             lastName: registration.lastName,
                         },
                     });
@@ -244,6 +248,7 @@ export default async function (fastify: FastifyInstance) {
                         registration: {
                             regCode: registration.regCode,
                             firstName: registration.firstName,
+                            middleName: (registration as any).middleName,
                             lastName: registration.lastName,
                         },
                     });
@@ -263,6 +268,7 @@ export default async function (fastify: FastifyInstance) {
                             registration: {
                                 regCode: registration.regCode,
                                 firstName: registration.firstName,
+                                middleName: (registration as any).middleName,
                                 lastName: registration.lastName,
                             },
                         });
@@ -277,6 +283,7 @@ export default async function (fastify: FastifyInstance) {
                             registration: {
                                 regCode: registration.regCode,
                                 firstName: registration.firstName,
+                                middleName: (registration as any).middleName,
                                 lastName: registration.lastName,
                             },
                         });
@@ -299,6 +306,7 @@ export default async function (fastify: FastifyInstance) {
                         id: registration.id,
                         regCode: registration.regCode,
                         firstName: registration.firstName,
+                        middleName: (registration as any).middleName,
                         lastName: registration.lastName,
                         ticketName: (registration as any).ticketType?.name,
                         eventName: (registration as any).event?.eventName,
@@ -367,6 +375,7 @@ export default async function (fastify: FastifyInstance) {
                         id: registration.id,
                         regCode: registration.regCode,
                         firstName: registration.firstName,
+                        middleName: (registration as any).middleName,
                         lastName: registration.lastName,
                         ticketName: (registration as any).ticketType?.name,
                         eventName: (registration as any).event?.eventName,
@@ -444,6 +453,7 @@ export default async function (fastify: FastifyInstance) {
                         id: registration.id,
                         regCode: registration.regCode,
                         firstName: registration.firstName,
+                        middleName: (registration as any).middleName,
                         lastName: registration.lastName,
                         ticketName: (registration as any).ticketType?.name,
                         eventName: (registration as any).event?.eventName,
@@ -457,6 +467,7 @@ export default async function (fastify: FastifyInstance) {
                     id: registration.id,
                     regCode: registration.regCode,
                     firstName: registration.firstName,
+                    middleName: (registration as any).middleName,
                     lastName: registration.lastName,
                     email: registration.email,
                     status: registration.status,
@@ -498,6 +509,7 @@ export default async function (fastify: FastifyInstance) {
                     sessionName: sessions.sessionName,
                     regCode: registrations.regCode,
                     firstName: registrations.firstName,
+                    middleName: registrations.middleName,
                     lastName: registrations.lastName,
                 })
                 .from(registrationSessions)
@@ -537,7 +549,7 @@ export default async function (fastify: FastifyInstance) {
                     registrationSessionId,
                     sessionName: rs.sessionName,
                     regCode: rs.regCode,
-                    name: `${rs.firstName} ${rs.lastName}`,
+                    name: getFullName(rs.firstName, rs.middleName, rs.lastName),
                 },
             });
         } catch (error) {

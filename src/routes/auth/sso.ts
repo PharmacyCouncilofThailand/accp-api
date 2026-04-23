@@ -4,6 +4,7 @@ import { ssoTokens, users, events } from "../../database/schema.js";
 import { eq, and, gt, lt } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { JWT_EXPIRY } from "../../constants/auth.js";
+import { getFullName } from "../../utils/name.js";
 
 const SSO_TOKEN_EXPIRY_MS = 60_000; // 60 seconds
 
@@ -110,6 +111,7 @@ export default async function (fastify: FastifyInstance) {
         role: users.role,
         status: users.status,
         firstName: users.firstName,
+        middleName: users.middleName,
         lastName: users.lastName,
         country: users.country,
         phone: users.phone,
@@ -180,6 +182,7 @@ export default async function (fastify: FastifyInstance) {
         id: user.id,
         email: user.email,
         firstName: user.firstName,
+        middleName: user.middleName,
         lastName: user.lastName,
         role: user.role,
         country: user.country,
@@ -190,7 +193,7 @@ export default async function (fastify: FastifyInstance) {
         university: user.university,
         idCard: user.thaiIdCard,
         pharmacyLicenseId: user.pharmacyLicenseId,
-        name: `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email,
+        name: getFullName(user.firstName, user.middleName, user.lastName) || user.email,
       },
     };
   });

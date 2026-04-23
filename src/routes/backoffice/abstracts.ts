@@ -114,6 +114,7 @@ export default async function (fastify: FastifyInstance) {
           or(
             ilike(abstracts.title, `%${search}%`),
             ilike(users.firstName, `%${search}%`),
+            ilike(users.middleName, `%${search}%`),
             ilike(users.lastName, `%${search}%`),
             ilike(users.email, `%${search}%`),
           ),
@@ -149,6 +150,7 @@ export default async function (fastify: FastifyInstance) {
           createdAt: abstracts.createdAt,
           author: {
             firstName: users.firstName,
+            middleName: users.middleName,
             lastName: users.lastName,
             email: users.email,
             phone: users.phone,
@@ -222,6 +224,7 @@ export default async function (fastify: FastifyInstance) {
           createdAt: abstracts.createdAt,
           author: {
             firstName: users.firstName,
+            middleName: users.middleName,
             lastName: users.lastName,
             email: users.email,
             phone: users.phone,
@@ -289,6 +292,7 @@ export default async function (fastify: FastifyInstance) {
         const [authorResult] = await db
           .select({
             firstName: users.firstName,
+            middleName: users.middleName,
             lastName: users.lastName,
             email: users.email,
           })
@@ -307,6 +311,7 @@ export default async function (fastify: FastifyInstance) {
               await sendAbstractAcceptedPosterEmail(
                 author.email,
                 author.firstName,
+                author.middleName,
                 author.lastName,
                 updatedAbstract.title,
                 comment,
@@ -318,6 +323,7 @@ export default async function (fastify: FastifyInstance) {
               await sendAbstractAcceptedOralEmail(
                 author.email,
                 author.firstName,
+                author.middleName,
                 author.lastName,
                 updatedAbstract.title,
                 comment,
@@ -330,6 +336,7 @@ export default async function (fastify: FastifyInstance) {
             await sendAbstractRejectedEmail(
               author.email,
               author.firstName,
+              author.middleName,
               author.lastName,
               updatedAbstract.title,
               comment,

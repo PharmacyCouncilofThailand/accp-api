@@ -13,6 +13,7 @@ import {
   PresentationType,
 } from "../../../services/googleDrive.js";
 import { eq, and, sql } from "drizzle-orm";
+import { getFullName } from "../../../utils/name.js";
 
 // Allowed file types for abstract documents
 const ALLOWED_MIME_TYPES = ["application/pdf"];
@@ -135,6 +136,7 @@ export default async function (fastify: FastifyInstance) {
 
       const {
         firstName,
+        middleName,
         lastName,
         email,
         affiliation,
@@ -254,6 +256,7 @@ export default async function (fastify: FastifyInstance) {
         const coAuthorsToInsert = coAuthors.map((coAuthor, index) => ({
           abstractId: newAbstract.id,
           firstName: coAuthor.firstName,
+          middleName: coAuthor.middleName || null,
           lastName: coAuthor.lastName,
           email: coAuthor.email,
           institution: coAuthor.institution,
@@ -287,7 +290,7 @@ export default async function (fastify: FastifyInstance) {
 
           // 2. Send to Co-authors (with delay to prevent Rate Limit)
           if (coAuthors && coAuthors.length > 0) {
-            const mainAuthorName = `${firstName} ${lastName}`;
+            const mainAuthorName = getFullName(firstName, middleName, lastName);
 
             for (const coAuthor of coAuthors) {
               await delay(800);
@@ -296,6 +299,7 @@ export default async function (fastify: FastifyInstance) {
                 await sendCoAuthorNotificationEmail(
                   coAuthor.email,
                   coAuthor.firstName,
+                  coAuthor.middleName || null,
                   coAuthor.lastName,
                   mainAuthorName,
                   trackingId,

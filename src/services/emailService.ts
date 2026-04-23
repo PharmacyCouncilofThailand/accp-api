@@ -1,4 +1,5 @@
 import axios from "axios";
+import { getFullName } from "../utils/name.js";
 
 // ============================================
 // NipaMail Configuration
@@ -207,6 +208,7 @@ function getContactEmail(): string {
 export async function sendManualRegistrationEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   regCode: string,
   eventName: string,
@@ -228,7 +230,7 @@ export async function sendManualRegistrationEmail(
     : "  - (No sessions)";
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Your registration for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY has been confirmed by the conference staff. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 
@@ -320,13 +322,14 @@ Bangkok Thailand
 export async function sendCoAuthorNotificationEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   mainAuthorName: string,
   trackingId: string,
   abstractTitle: string
 ): Promise<void> {
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 We would like to notify you that your co-authored abstract, titled "${abstractTitle}", has been submitted to the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 
@@ -354,6 +357,7 @@ Bangkok Thailand
 export async function sendAbstractAcceptedPosterEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   abstractTitle: string,
   comment?: string
@@ -363,7 +367,7 @@ export async function sendAbstractAcceptedPosterEmail(
   const commentText = comment ? `\nComment: ${comment}\n` : '';
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Congratulations! Your abstract, titled "${abstractTitle}", is ACCEPTED as a POSTER PRESENTATION at the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 ${commentText}
@@ -392,6 +396,7 @@ Bangkok Thailand
 export async function sendAbstractAcceptedOralEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   abstractTitle: string,
   comment?: string
@@ -401,7 +406,7 @@ export async function sendAbstractAcceptedOralEmail(
   const commentText = comment ? `\nComment: ${comment}\n` : '';
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Congratulations! Your abstract, titled "${abstractTitle}", is ACCEPTED as an ORAL PRESENTATION at the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 ${commentText}
@@ -430,6 +435,7 @@ Bangkok Thailand
 export async function sendAbstractRejectedEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   abstractTitle: string,
   comment?: string
@@ -437,7 +443,7 @@ export async function sendAbstractRejectedEmail(
   const commentText = comment ? `\nComment: ${comment}\n` : '';
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you very much for submitting your abstract for poster or oral presentation at the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. Unfortunately, there are many high-quality abstracts, but we still have limited availability for poster or oral presentations.
 
@@ -471,10 +477,11 @@ Bangkok Thailand
 export async function sendPendingApprovalEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string
 ): Promise<void> {
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you for your registration for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 
@@ -542,13 +549,14 @@ Bangkok Thailand
 export async function sendVerificationRejectedEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   rejectionReason?: string
 ): Promise<void> {
   const reasonText = rejectionReason ? `\nReason: ${rejectionReason}\n` : '';
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you for your registration for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 
@@ -575,10 +583,11 @@ Bangkok Thailand
 export async function sendDocumentResubmittedEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string
 ): Promise<void> {
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you for resubmitting your verification document for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 
@@ -605,12 +614,13 @@ Bangkok Thailand
 export async function sendSignupNotificationEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string
 ): Promise<void> {
   const websiteUrl = getWebsiteUrl();
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you for your registration via the website for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 
@@ -639,12 +649,13 @@ Bangkok Thailand
 export async function sendRegistrationConfirmationEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string
 ): Promise<void> {
   const websiteUrl = getWebsiteUrl();
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you for your registration for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 
@@ -731,6 +742,7 @@ interface TaxInvoiceEmailInfo {
 export async function sendPaymentReceiptEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   orderNumber: string,
   paidAt: Date,
@@ -781,7 +793,7 @@ Tax Address: ${taxInvoice.taxFullAddress || "-"}`
     : "";
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you for your registration and payment for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
 

@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { EventEmailContext } from "./emailTemplates.types.js";
+import { getFullName } from "../utils/name.js";
 
 // ============================================
 // NipaMail Configuration (shared with emailService.ts)
@@ -176,6 +177,7 @@ function introLine(ctx: EventEmailContext): string {
 export async function sendEventRegistrationEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   regCode: string,
   ticketName: string,
@@ -208,7 +210,7 @@ export async function sendEventRegistrationEmail(
       : "  - (No sessions)";
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Your registration for the ${ctx.eventName} has been confirmed. ${introLine(ctx)}
 
@@ -268,6 +270,7 @@ interface TaxInvoiceEmailInfo {
 export async function sendEventPaymentReceiptEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   orderNumber: string,
   paidAt: Date,
@@ -317,7 +320,7 @@ Tax Address: ${taxInvoice.taxFullAddress || "-"}`
     : "";
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you for your registration and payment for the ${ctx.eventName}. ${introLine(ctx)}
 
@@ -410,6 +413,7 @@ ${signature(ctx)}
 export async function sendEventCoAuthorNotificationEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   mainAuthorName: string,
   trackingId: string,
@@ -417,7 +421,7 @@ export async function sendEventCoAuthorNotificationEmail(
   ctx: EventEmailContext
 ): Promise<void> {
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 We would like to notify you that your co-authored abstract, titled "${abstractTitle}", has been submitted to the ${ctx.eventName}. ${introLine(ctx)}
 
@@ -443,6 +447,7 @@ ${signature(ctx)}
 export async function sendEventAbstractAcceptedEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   abstractTitle: string,
   presentationType: "poster" | "oral",
@@ -454,7 +459,7 @@ export async function sendEventAbstractAcceptedEmail(
   const commentText = comment ? `\nComment: ${comment}\n` : "";
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Congratulations! Your abstract, titled "${abstractTitle}", is ACCEPTED as ${articlePrefix} ${typeLabel} at the ${ctx.eventName}. ${introLine(ctx)}
 ${commentText}
@@ -485,6 +490,7 @@ ${signature(ctx)}
 export async function sendEventAbstractRejectedEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   abstractTitle: string,
   ctx: EventEmailContext,
@@ -493,7 +499,7 @@ export async function sendEventAbstractRejectedEmail(
   const commentText = comment ? `\nComment: ${comment}\n` : "";
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you very much for submitting your abstract for poster or oral presentation at the ${ctx.eventName}. Unfortunately, there are many high-quality abstracts, but we still have limited availability for poster or oral presentations.
 
@@ -520,11 +526,12 @@ ${signature(ctx)}
 export async function sendEventSignupNotificationEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   ctx: EventEmailContext
 ): Promise<void> {
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you for your registration via the website for the ${ctx.eventName}. ${introLine(ctx)}
 
@@ -551,11 +558,12 @@ ${signature(ctx)}
 export async function sendEventPendingApprovalEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   ctx: EventEmailContext
 ): Promise<void> {
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you for your registration for the ${ctx.eventName}. ${introLine(ctx)}
 
@@ -616,6 +624,7 @@ ${signature(ctx)}
 export async function sendEventVerificationRejectedEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   ctx: EventEmailContext,
   rejectionReason?: string
@@ -623,7 +632,7 @@ export async function sendEventVerificationRejectedEmail(
   const reasonText = rejectionReason ? `\nReason: ${rejectionReason}\n` : "";
 
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you for your registration for the ${ctx.eventName}. ${introLine(ctx)}
 
@@ -648,11 +657,12 @@ ${signature(ctx)}
 export async function sendEventDocumentResubmittedEmail(
   email: string,
   firstName: string,
+  middleName: string | null,
   lastName: string,
   ctx: EventEmailContext
 ): Promise<void> {
   const plainText = `
-Dear ${firstName} ${lastName},
+Dear ${getFullName(firstName, middleName, lastName)},
 
 Thank you for resubmitting your verification document for the ${ctx.eventName}. ${introLine(ctx)}
 
