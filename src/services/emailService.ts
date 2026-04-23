@@ -853,6 +853,112 @@ Bangkok Thailand
 // CONTACT FORM EMAIL
 // ============================================
 
+// ============================================
+// EMAIL CONTENT BUILDERS (for preview/render)
+// ============================================
+
+/**
+ * Wrap plain text in a clean HTML email template
+ * Mimics the conversion done by sendNipaMailEmail (which calls sendNipaMailHtml internally)
+ */
+export function buildEmailHtmlFromText(plainText: string): string {
+  const bodyHtml = plainText
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\n/g, "<br>\n");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Email Preview</title></head><body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;"><div style="max-width:600px;margin:24px auto;background:#ffffff;border-radius:8px;padding:32px 40px;box-shadow:0 2px 8px rgba(0,0,0,0.08);"><div style="color:#374151;font-size:14px;line-height:1.8;">${bodyHtml}</div><hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;"><p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">25th ACCP Annual Conference 2026 · Bangkok, Thailand</p></div></body></html>`;
+}
+
+export function buildSignupNotificationEmailContent(
+  firstName: string, middleName: string | null, lastName: string
+): { subject: string; html: string } {
+  const websiteUrl = getWebsiteUrl();
+  const plainText = `Dear ${getFullName(firstName, middleName, lastName)},\n\nThank you for your registration via the website for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.\n\nFor more information and details about the conference, go to ${websiteUrl}\n\nSee you soon at ACCP 2026, Bangkok, Thailand.\n\nSincerely,\n25th ACCP committee\nBangkok Thailand`;
+  return { subject: "Registration Successful - Welcome to 25th ACCP 2026", html: buildEmailHtmlFromText(plainText) };
+}
+
+export function buildPendingApprovalEmailContent(
+  firstName: string, middleName: string | null, lastName: string
+): { subject: string; html: string } {
+  const plainText = `Dear ${getFullName(firstName, middleName, lastName)},\n\nThank you for your registration for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.\n\nFor the student registration fee, we have to check the documents to verify that they are students. This will take 3-5 days. After finishing checking the document, we will email you again for the registration confirmation.\n\nSincerely,\n25th ACCP committee\nBangkok Thailand`;
+  return { subject: "Registration Received - Document Verification Pending | 25th ACCP 2026", html: buildEmailHtmlFromText(plainText) };
+}
+
+export function buildAbstractSubmissionEmailContent(
+  firstName: string, lastName: string, trackingId: string, abstractTitle: string
+): { subject: string; html: string } {
+  const contactEmail = getContactEmail();
+  const plainText = `Thank you for submitting the abstract for the poster or oral presentation at the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.\n\nWe have already received your abstract and will notify you of the result of the abstract acceptance within 2 weeks after abstract submission.\n\nTracking ID: ${trackingId}\nAbstract Title: ${abstractTitle}\n\nIf you have any questions, please get in touch with ${contactEmail}\n\nSincerely,\n25th ACCP committee\nBangkok Thailand`;
+  return { subject: "Abstract Submission Received - 25th ACCP 2026", html: buildEmailHtmlFromText(plainText) };
+}
+
+export function buildAbstractAcceptedPosterEmailContent(
+  firstName: string, middleName: string | null, lastName: string, abstractTitle: string, comment?: string
+): { subject: string; html: string } {
+  const websiteUrl = getWebsiteUrl();
+  const contactEmail = getContactEmail();
+  const commentText = comment ? `\nComment: ${comment}\n` : "";
+  const plainText = `Dear ${getFullName(firstName, middleName, lastName)},\n\nCongratulations! Your abstract, titled "${abstractTitle}", is ACCEPTED as a POSTER PRESENTATION at the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.\n${commentText}\nAll poster presenters must be registered for the meeting in order to present their poster. For registration information and details go to ${websiteUrl}\n\nWe look forward to your presentation. If you have any questions, please contact ${contactEmail}\n\nSincerely,\n25th ACCP committee\nBangkok Thailand`;
+  return { subject: "Congratulations! Abstract Accepted (Poster) - 25th ACCP 2026", html: buildEmailHtmlFromText(plainText) };
+}
+
+export function buildAbstractAcceptedOralEmailContent(
+  firstName: string, middleName: string | null, lastName: string, abstractTitle: string, comment?: string
+): { subject: string; html: string } {
+  const websiteUrl = getWebsiteUrl();
+  const contactEmail = getContactEmail();
+  const commentText = comment ? `\nComment: ${comment}\n` : "";
+  const plainText = `Dear ${getFullName(firstName, middleName, lastName)},\n\nCongratulations! Your abstract, titled "${abstractTitle}", is ACCEPTED as an ORAL PRESENTATION at the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.\n${commentText}\nAll oral presenters must be registered for the meeting in order to present. For registration information and details go to ${websiteUrl}\n\nWe look forward to your presentation. If you have any questions, please contact ${contactEmail}\n\nSincerely,\n25th ACCP committee\nBangkok Thailand`;
+  return { subject: "Congratulations! Abstract Accepted (Oral) - 25th ACCP 2026", html: buildEmailHtmlFromText(plainText) };
+}
+
+export function buildAbstractRejectedEmailContent(
+  firstName: string, middleName: string | null, lastName: string, abstractTitle: string, comment?: string
+): { subject: string; html: string } {
+  const commentText = comment ? `\nComment: ${comment}\n` : "";
+  const plainText = `Dear ${getFullName(firstName, middleName, lastName)},\n\nThank you very much for submitting your abstract for poster or oral presentation at the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. Unfortunately, there are many high-quality abstracts, but we still have limited availability for poster or oral presentations.\n\nAbstract Title: ${abstractTitle}\n${commentText}\nThank you so much again for your submission. Looking forward to your abstract at next year's conference.\n\nSincerely,\n25th ACCP committee\nBangkok Thailand`;
+  return { subject: "Abstract Submission Update - 25th ACCP 2026", html: buildEmailHtmlFromText(plainText) };
+}
+
+export function buildPaymentReceiptEmailContent(
+  firstName: string, middleName: string | null, lastName: string,
+  orderNumber: string, paidAt: Date, paymentChannel: string,
+  items: { name: string; type: string; price: number }[],
+  subtotal: number, fee: number, total: number, currency: string,
+  receiptDownloadUrl: string, taxInvoice?: { taxName: string | null; taxId: string | null; taxFullAddress: string | null },
+  regCode?: string
+): { subject: string; html: string } {
+  const contactEmail = getContactEmail();
+  const currencySymbol = currency === "THB" ? "\u0E3F" : "$";
+  const methodLabel = paymentChannel === "promptpay" ? "PromptPay (QR)" : "Credit/Debit Card";
+  const dateStr = paidAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
+  const itemLines = items.map((i) => `  - ${i.name}: ${currencySymbol}${i.price.toLocaleString()}`).join("\n");
+  const feeLineText = fee > 0 ? `  - Payment Processing Fee: ${currencySymbol}${fee.toLocaleString()}\n` : "";
+  const taxInvoiceText = taxInvoice ? `\nTax Invoice Details:\nName: ${taxInvoice.taxName || "-"}\nTax ID: ${taxInvoice.taxId || "-"}\nTax Address: ${taxInvoice.taxFullAddress || "-"}` : "";
+  const websiteUrl = getWebsiteUrl();
+  const qrUrl = regCode ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(regCode)}` : "";
+
+  const plainText = `Dear ${getFullName(firstName, middleName, lastName)},\n\nThank you for your registration and payment for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.\n\nYour registration has been confirmed. Below is your payment summary:\n\nOrder Number: ${orderNumber}\nPayment Date: ${dateStr}\nPayment Method: ${methodLabel}\n\nItems:\n${itemLines}\n${feeLineText}Total Paid: ${currencySymbol}${total.toLocaleString()}\n${taxInvoiceText}\n${regCode ? `\nRegistration Code: ${regCode}\nPresent this QR code at the event for check-in.` : ""}\n\nDownload your receipt (PDF): ${receiptDownloadUrl}\n\nFor more information and details about the conference, go to ${websiteUrl}\n\nIf you have any questions, please contact ${contactEmail}\n\nSee you soon at ACCP 2026, Bangkok, Thailand.\n\nSincerely,\n25th ACCP committee\nBangkok Thailand`;
+
+  let htmlContent = plainText
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/\n/g, "<br>\n");
+
+  htmlContent = htmlContent.replace(
+    `Download your receipt (PDF): ${receiptDownloadUrl}`,
+    `Download your receipt (PDF): <a href="${receiptDownloadUrl}" style="color:#1a73e8;font-weight:bold;text-decoration:underline;">Download Here</a>`
+  );
+
+  if (qrUrl && regCode) {
+    const qrHtml = `<br><div style="text-align:center;margin:20px 0;"><img src="${qrUrl}" alt="QR: ${regCode}" width="200" height="200" style="display:block;margin:0 auto;" /><p style="font-size:12px;color:#6b7280;margin-top:8px;">${regCode}</p></div>`;
+    htmlContent = htmlContent.replace(`Registration Code: ${regCode}`, `Registration Code: <strong>${regCode}</strong>${qrHtml}`);
+  }
+
+  const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Email Preview</title></head><body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;"><div style="max-width:600px;margin:24px auto;background:#fff;border-radius:8px;padding:32px 40px;box-shadow:0 2px 8px rgba(0,0,0,0.08);"><div style="color:#374151;font-size:14px;line-height:1.8;">${htmlContent}</div><hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;"><p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">25th ACCP Annual Conference 2026 · Bangkok, Thailand</p></div></body></html>`;
+  return { subject: `Payment Receipt - ${orderNumber} | 25th ACCP 2026`, html: fullHtml };
+}
+
 /**
  * Send contact form email to conference organizers
  * Email will be sent to accpbangkok2026@gmail.com with Reply-To set to user's email
