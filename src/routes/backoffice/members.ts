@@ -73,6 +73,7 @@ export default async function (fastify: FastifyInstance) {
         conditions.push(
           or(
             ilike(users.firstName, `%${search}%`),
+            ilike(users.middleName, `%${search}%`),
             ilike(users.lastName, `%${search}%`),
             ilike(users.email, `%${search}%`)
           )!
@@ -93,6 +94,7 @@ export default async function (fastify: FastifyInstance) {
           id: users.id,
           email: users.email,
           firstName: users.firstName,
+          middleName: users.middleName,
           lastName: users.lastName,
           role: users.role,
           status: users.status,
@@ -132,6 +134,7 @@ export default async function (fastify: FastifyInstance) {
           id: users.id,
           email: users.email,
           firstName: users.firstName,
+          middleName: users.middleName,
           lastName: users.lastName,
           role: users.role,
           status: users.status,
@@ -203,6 +206,7 @@ export default async function (fastify: FastifyInstance) {
       email: z.string().email(),
       password: z.string().min(6),
       firstName: z.string().min(1).max(100),
+      middleName: z.string().max(100).optional().nullable(),
       lastName: z.string().min(1).max(100),
       role: z.enum(["thstd", "interstd", "thpro", "interpro", "general", "admin"]),
       status: z.enum(["pending_approval", "active", "rejected"]).default("active"),
@@ -248,6 +252,7 @@ export default async function (fastify: FastifyInstance) {
           id: users.id,
           email: users.email,
           firstName: users.firstName,
+          middleName: users.middleName,
           lastName: users.lastName,
           role: users.role,
           status: users.status,
@@ -273,6 +278,7 @@ export default async function (fastify: FastifyInstance) {
       email: z.string().email().optional(),
       password: z.string().min(6).optional(),
       firstName: z.string().min(1).max(100).optional(),
+      middleName: z.string().max(100).optional().nullable(),
       lastName: z.string().min(1).max(100).optional(),
       role: z.enum(["thstd", "interstd", "thpro", "interpro", "general", "admin"]).optional(),
       status: z.enum(["pending_approval", "active", "rejected"]).optional(),
@@ -323,6 +329,7 @@ export default async function (fastify: FastifyInstance) {
           id: users.id,
           email: users.email,
           firstName: users.firstName,
+          middleName: users.middleName,
           lastName: users.lastName,
           role: users.role,
           status: users.status,

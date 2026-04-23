@@ -656,6 +656,7 @@ export default async function (fastify: FastifyInstance) {
             regCode: registrations.regCode,
             email: registrations.email,
             firstName: registrations.firstName,
+            middleName: registrations.middleName,
             lastName: registrations.lastName,
             status: registrations.status,
             createdAt: registrations.createdAt,

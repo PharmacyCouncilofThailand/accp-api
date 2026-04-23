@@ -64,6 +64,20 @@
       "when": 1775552130945,
       "tag": "0008_whole_agent_brand",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1776884440951,
+      "tag": "0009_cold_molten_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1776890340699,
+      "tag": "0010_special_kinsey_walden",
+      "breakpoints": true
     }
   ]
 }

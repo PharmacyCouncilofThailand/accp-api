@@ -67,6 +67,7 @@ export default async function (fastify: FastifyInstance) {
                 conditions.push(
                     or(
                         ilike(registrations.firstName, `%${search}%`),
+                        ilike(registrations.middleName, `%${search}%`),
                         ilike(registrations.lastName, `%${search}%`),
                         ilike(registrations.email, `%${search}%`),
                         ilike(registrations.regCode, `%${search}%`)
@@ -88,6 +89,7 @@ export default async function (fastify: FastifyInstance) {
                     id: registrations.id,
                     regCode: registrations.regCode,
                     firstName: registrations.firstName,
+                    middleName: registrations.middleName,
                     lastName: registrations.lastName,
                     email: registrations.email,
                     status: registrations.status,
@@ -136,6 +138,7 @@ export default async function (fastify: FastifyInstance) {
                     regCode: registrations.regCode,
                     email: registrations.email,
                     firstName: registrations.firstName,
+                    middleName: registrations.middleName,
                     lastName: registrations.lastName,
                     dietaryRequirements: registrations.dietaryRequirements,
                     status: registrations.status,
@@ -248,7 +251,7 @@ export default async function (fastify: FastifyInstance) {
             const registration = await db.transaction(async (tx) => {
                 // 1. Validate user exists
                 const [user] = await tx
-                    .select({ id: users.id, email: users.email, firstName: users.firstName, lastName: users.lastName })
+                    .select({ id: users.id, email: users.email, firstName: users.firstName, middleName: users.middleName, lastName: users.lastName })
                     .from(users)
                     .where(eq(users.id, userId))
                     .limit(1);
@@ -303,6 +306,7 @@ export default async function (fastify: FastifyInstance) {
                     userId,
                     email: user.email,
                     firstName: user.firstName,
+                    middleName: user.middleName,
                     lastName: user.lastName,
                     status: "confirmed",
                     source: "manual",
@@ -358,6 +362,7 @@ export default async function (fastify: FastifyInstance) {
                     sessionsLinked: sessionsToLink,
                     userEmail: user.email,
                     userFirstName: user.firstName,
+                    userMiddleName: user.middleName,
                     userLastName: user.lastName,
                 };
             });
@@ -381,6 +386,7 @@ export default async function (fastify: FastifyInstance) {
                         await sendManualRegistrationEmail(
                             registration.userEmail,
                             registration.userFirstName,
+                            registration.userMiddleName,
                             registration.userLastName,
                             registration.regCode,
                             registration.eventRow.eventName,
@@ -394,6 +400,7 @@ export default async function (fastify: FastifyInstance) {
                         await sendEventRegistrationEmail(
                             registration.userEmail,
                             registration.userFirstName,
+                            registration.userMiddleName,
                             registration.userLastName,
                             registration.regCode,
                             registration.ticketName,
@@ -642,7 +649,7 @@ export default async function (fastify: FastifyInstance) {
 
                 // 3. Get all users
                 const userList = await tx
-                    .select({ id: users.id, email: users.email, firstName: users.firstName, lastName: users.lastName })
+                    .select({ id: users.id, email: users.email, firstName: users.firstName, middleName: users.middleName, lastName: users.lastName })
                     .from(users)
                     .where(inArray(users.id, userIds));
 
@@ -760,6 +767,7 @@ export default async function (fastify: FastifyInstance) {
                         userId,
                         email: user.email,
                         firstName: user.firstName,
+                        middleName: user.middleName,
                         lastName: user.lastName,
                         status: "confirmed",
                         source: "manual",
@@ -784,6 +792,7 @@ export default async function (fastify: FastifyInstance) {
                         userId,
                         regCode: newReg.regCode,
                         firstName: user.firstName,
+                        middleName: user.middleName,
                         lastName: user.lastName,
                     });
                 }
@@ -840,6 +849,7 @@ export default async function (fastify: FastifyInstance) {
                                         await sendManualRegistrationEmail(
                                             user[0].email,
                                             reg.firstName,
+                                            reg.middleName,
                                             reg.lastName,
                                             reg.regCode,
                                             results.eventRow.eventName,
@@ -850,6 +860,7 @@ export default async function (fastify: FastifyInstance) {
                                         await sendEventRegistrationEmail(
                                             user[0].email,
                                             reg.firstName,
+                                            reg.middleName,
                                             reg.lastName,
                                             reg.regCode,
                                             ticketRow[0].name,

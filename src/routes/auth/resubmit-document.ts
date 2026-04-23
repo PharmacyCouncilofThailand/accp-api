@@ -162,6 +162,7 @@ export default async function (fastify: FastifyInstance) {
         await sendDocumentResubmittedEmail(
           updatedUser.email,
           updatedUser.firstName,
+          updatedUser.middleName,
           updatedUser.lastName
         );
         fastify.log.info(`Document resubmission email sent to ${updatedUser.email}`);

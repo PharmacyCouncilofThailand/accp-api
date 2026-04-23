@@ -13,6 +13,7 @@ export const registrationListSchema = z.object({
 export const updateRegistrationSchema = z.object({
     userId: z.number().optional(),
     firstName: z.string().optional(),
+    middleName: z.string().optional(),
     lastName: z.string().optional(),
     email: z.string().email().optional(),
     status: z.enum(['confirmed', 'cancelled']).optional(),

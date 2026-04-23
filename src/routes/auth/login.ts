@@ -6,6 +6,7 @@ import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { verifyRecaptcha, isRecaptchaEnabled } from "../../utils/recaptcha.js";
 import { JWT_EXPIRY } from "../../constants/auth.js";
+import { getFullName } from "../../utils/name.js";
 
 export default async function (fastify: FastifyInstance) {
   fastify.post("/login", async (request, reply) => {
@@ -128,6 +129,7 @@ export default async function (fastify: FastifyInstance) {
           id: user.id,
           email: user.email,
           firstName: user.firstName,
+          middleName: user.middleName,
           lastName: user.lastName,
           role: user.role,
           country: user.country,
@@ -138,7 +140,7 @@ export default async function (fastify: FastifyInstance) {
           institution: user.institution,
           university: user.university,
           pharmacyLicenseId: user.pharmacyLicenseId,
-          name: `${user.firstName || ""} ${user.lastName || ""}`.trim() || user.email,
+          name: getFullName(user.firstName, user.middleName, user.lastName) || user.email,
         },
       });
 

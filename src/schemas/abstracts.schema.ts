@@ -3,6 +3,7 @@ import { z } from 'zod';
 // Co-Author validation schema
 export const coAuthorSchema = z.object({
     firstName: z.string().min(1, 'First name is required'),
+    middleName: z.string().optional(),
     lastName: z.string().min(1, 'Last name is required'),
     email: z.string().email('Invalid email address'),
     institution: z.string().min(1, 'Institution is required'),
@@ -13,6 +14,7 @@ export const coAuthorSchema = z.object({
 export const abstractSubmissionSchema = z.object({
     // Author Information
     firstName: z.string().min(1, 'First name is required'),
+    middleName: z.string().optional(),
     lastName: z.string().min(1, 'Last name is required'),
     email: z.string().email('Invalid email address'),
     affiliation: z.string().min(1, 'Affiliation is required'),

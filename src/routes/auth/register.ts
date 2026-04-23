@@ -82,6 +82,7 @@ export async function authRoutes(fastify: FastifyInstance) {
 
       const {
         firstName,
+        middleName,
         lastName,
         email,
         password,
@@ -220,6 +221,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           passwordHash,
           role,
           firstName,
+          middleName: middleName || null,
           lastName,
           country: userCountry,
           institution: organization || null,
@@ -242,14 +244,14 @@ export async function authRoutes(fastify: FastifyInstance) {
         // Use legacy ACCP-specific emails
         if (initialStatus === "active") {
           try {
-            await sendSignupNotificationEmail(email, firstName, lastName);
+            await sendSignupNotificationEmail(email, firstName, middleName || null, lastName);
             fastify.log.info(`Signup notification email sent to ${email}`);
           } catch (emailError) {
             fastify.log.error({ err: emailError }, "Failed to send signup notification email");
           }
         } else {
           try {
-            await sendPendingApprovalEmail(email, firstName, lastName);
+            await sendPendingApprovalEmail(email, firstName, middleName || null, lastName);
             fastify.log.info(`Pending approval email sent to ${email}`);
           } catch (emailError) {
             fastify.log.error({ err: emailError }, "Failed to send pending approval email");
@@ -267,10 +269,10 @@ export async function authRoutes(fastify: FastifyInstance) {
           if (eventRow) {
             const ctx = buildEventEmailContext(eventRow);
             if (initialStatus === "active") {
-              await sendEventSignupNotificationEmail(email, firstName, lastName, ctx);
+              await sendEventSignupNotificationEmail(email, firstName, middleName || null, lastName, ctx);
               fastify.log.info(`[Generic] Signup email sent to ${email} for ${eventCode}`);
             } else {
-              await sendEventPendingApprovalEmail(email, firstName, lastName, ctx);
+              await sendEventPendingApprovalEmail(email, firstName, middleName || null, lastName, ctx);
               fastify.log.info(`[Generic] Pending approval email sent to ${email} for ${eventCode}`);
             }
           } else {
@@ -294,6 +296,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           id: newUser.id,
           email: newUser.email,
           firstName: newUser.firstName,
+          middleName: newUser.middleName,
           lastName: newUser.lastName,
           role: newUser.role,
           status: newUser.status,

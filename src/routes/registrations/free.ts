@@ -291,6 +291,7 @@ export default async function freeRegistrationRoutes(fastify: FastifyInstance) {
           .select({
             email: users.email,
             firstName: users.firstName,
+            middleName: users.middleName,
             lastName: users.lastName,
           })
           .from(users)
@@ -316,6 +317,7 @@ export default async function freeRegistrationRoutes(fastify: FastifyInstance) {
             userId,
             email: user.email,
             firstName: user.firstName,
+            middleName: user.middleName,
             lastName: user.lastName,
             status: "confirmed",
             source: "free",
@@ -416,6 +418,7 @@ export default async function freeRegistrationRoutes(fastify: FastifyInstance) {
               await sendManualRegistrationEmail(
                 user.email,
                 user.firstName,
+                user.middleName,
                 user.lastName,
                 result.regCode,
                 event.eventName,
@@ -433,6 +436,7 @@ export default async function freeRegistrationRoutes(fastify: FastifyInstance) {
               await sendEventRegistrationEmail(
                 user.email,
                 user.firstName,
+                user.middleName,
                 user.lastName,
                 result.regCode,
                 ticket.name,
