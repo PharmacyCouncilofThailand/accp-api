@@ -187,7 +187,7 @@ async function sendNipaMailHtml(
  * Get the conference website URL
  */
 function getWebsiteUrl(): string {
-  return process.env.BASE_URL || "https://accp2026.com";
+  return (process.env.BASE_URL || "https://accp2026.com").replace(/\/+$/, "");
 }
 
 /**
@@ -511,9 +511,7 @@ export async function sendVerificationApprovedEmail(
   firstName: string,
   comment?: string
 ): Promise<void> {
-  const loginUrl = process.env.BASE_URL
-    ? `${process.env.BASE_URL}/login`
-    : "http://localhost:3000/login";
+  const loginUrl = `${getWebsiteUrl()}/login`;
   const commentText = comment ? `\nComment: ${comment}\n` : '';
 
   const plainText = `
@@ -757,9 +755,7 @@ export async function sendPasswordResetEmail(
   firstName: string,
   resetToken: string
 ): Promise<void> {
-  const resetUrl = process.env.BASE_URL
-    ? `${process.env.BASE_URL}/reset-password?token=${resetToken}`
-    : `http://localhost:3000/reset-password?token=${resetToken}`;
+  const resetUrl = `${getWebsiteUrl()}/reset-password?token=${resetToken}`;
 
   const plainText = `
 Dear ${firstName},
