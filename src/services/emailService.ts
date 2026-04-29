@@ -577,6 +577,72 @@ Bangkok Thailand
 }
 
 /**
+ * Send role-changed-to-student email
+ * Called when admin converts a non-student account into a student account
+ * and requires the user to upload a verification document.
+ *
+ * @param targetLocale "th" or "en" - locale path used in resubmit URL
+ */
+export async function sendRoleChangedToStudentEmail(
+  email: string,
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  previousRoleLabel: string,
+  newRoleLabel: string,
+  reason: string,
+  targetLocale: "th" | "en" = "en"
+): Promise<void> {
+  const websiteUrl = getWebsiteUrl();
+  const resubmitUrl = `${websiteUrl}/${targetLocale}/resubmit-document?email=${encodeURIComponent(
+    email
+  )}&reason=${encodeURIComponent(reason)}`;
+
+  const plainText = `
+Dear ${getFullName(firstName, middleName, lastName)},
+
+Your account for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY has been updated by our team:
+
+  Previous account type: ${previousRoleLabel}
+  New account type:      ${newRoleLabel}
+
+To continue using your account at the student rate, please upload your student verification document (e.g. student ID card or enrollment certificate). Until your document has been reviewed and approved, your account will be temporarily restricted.
+
+Reason from our team:
+${reason}
+
+Please upload your document at the link below:
+${resubmitUrl}
+
+Once you upload your document, our team will review it within 3-5 business days. We will email you again after review.
+
+Sincerely,
+25th ACCP committee
+Bangkok Thailand
+  `.trim();
+
+  // Build HTML: convert plain text to <br> and replace the long URL with a styled anchor
+  let htmlContent = plainText.replace(/\n/g, "<br>\n");
+
+  htmlContent = htmlContent.replace(
+    `Please upload your document at the link below:<br>\n${resubmitUrl}`,
+    `Please upload your document by clicking the link: <a href="${resubmitUrl}" style="color:#1a73e8;font-weight:bold;text-decoration:underline;">Upload Document Here</a>`
+  );
+
+  try {
+    await sendNipaMailHtml(
+      email,
+      "Account Type Updated - Student Document Required | 25th ACCP 2026",
+      htmlContent
+    );
+    console.log(`Role-changed-to-student email sent to ${email}`);
+  } catch (error) {
+    console.error("Error sending role-changed-to-student email:", error);
+    throw error;
+  }
+}
+
+/**
  * Send document resubmission confirmation email
  * Called when user resubmits their verification document
  */

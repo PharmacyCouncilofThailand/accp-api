@@ -13,11 +13,19 @@ import {
   abstractReviews,
   passwordResetTokens,
   verificationRejectionHistory,
+  ssoTokens,
 } from "../../database/schema.js";
-import { eq, desc, ilike, or, count, and, SQL, inArray, exists, ne } from "drizzle-orm";
+import { eq, desc, ilike, or, count, and, SQL, inArray, exists, ne, lt } from "drizzle-orm";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import { randomUUID } from "crypto";
 import { BCRYPT_ROUNDS } from "../../constants/auth.js";
+
+// One-time SSO token expiry for impersonation (60 seconds)
+const IMPERSONATE_TOKEN_EXPIRY_MS = 60_000;
+
+// Default target URL when redirecting impersonated admin to the public web app (accp-web)
+const DEFAULT_WEB_URL = process.env.BASE_URL || "http://localhost:3000";
 
 // Query schema for listing members
 const listMembersQuerySchema = z.object({
@@ -347,6 +355,263 @@ export default async function (fastify: FastifyInstance) {
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: "Failed to update member" });
+    }
+  });
+
+  // ── Convert non-student account to student & require document resubmission ──
+  // Used when a user signed up with the wrong role (e.g. as Professional but should be Student).
+  // Atomically: change role -> student, status -> rejected, clear verificationDocUrl,
+  // log to verification_rejection_history, and email the user a resubmit link.
+  fastify.post("/:id/request-verification", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const userId = parseInt(id);
+
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return reply.status(400).send({ success: false, error: "Invalid user id" });
+    }
+
+    const requestSchema = z.object({
+      targetRole: z.enum(["thstd", "interstd"], {
+        errorMap: () => ({ message: "targetRole must be 'thstd' or 'interstd'" }),
+      }),
+      reason: z
+        .string()
+        .min(10, "Reason must be at least 10 characters")
+        .max(1000, "Reason must be at most 1000 characters"),
+    });
+
+    const parsed = requestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Invalid input", details: parsed.error.flatten() });
+    }
+
+    const { targetRole, reason } = parsed.data;
+
+    try {
+      // Load current user
+      const [currentUser] = await db
+        .select({
+          id: users.id,
+          email: users.email,
+          firstName: users.firstName,
+          middleName: users.middleName,
+          lastName: users.lastName,
+          role: users.role,
+          status: users.status,
+          country: users.country,
+        })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+
+      if (!currentUser) {
+        return reply.status(404).send({ success: false, error: "Member not found" });
+      }
+
+      // Block converting accounts that are already student or admin
+      if (
+        currentUser.role === "thstd" ||
+        currentUser.role === "interstd" ||
+        currentUser.role === "admin"
+      ) {
+        return reply.status(400).send({
+          success: false,
+          code: "INVALID_CURRENT_ROLE",
+          error: "This action is only available for non-student / non-admin accounts.",
+        });
+      }
+
+      const previousRole = currentUser.role;
+      const adminUser = request.user as { id: number } | undefined;
+
+      // Atomic update
+      const [updatedUser] = await db.transaction(async (tx) => {
+        const [updated] = await tx
+          .update(users)
+          .set({
+            role: targetRole,
+            status: "rejected",
+            rejectionReason: reason,
+            verificationDocUrl: null, // clear old doc; user must upload a fresh student doc
+          })
+          .where(eq(users.id, userId))
+          .returning({
+            id: users.id,
+            email: users.email,
+            firstName: users.firstName,
+            middleName: users.middleName,
+            lastName: users.lastName,
+            role: users.role,
+            status: users.status,
+            rejectionReason: users.rejectionReason,
+            country: users.country,
+          });
+
+        // Record in verification rejection history
+        await tx.insert(verificationRejectionHistory).values({
+          userId,
+          reason,
+          rejectedBy: adminUser?.id ?? null,
+        });
+
+        return [updated];
+      });
+
+      // Determine locale for the resubmit link in the email
+      // Thai students get /th/, International students get /en/
+      const targetLocale: "th" | "en" = targetRole === "thstd" ? "th" : "en";
+
+      // Friendly role labels for the email body
+      const roleLabelMap: Record<string, string> = {
+        thstd: "Thai Student",
+        interstd: "International Student",
+        thpro: "Thai Professional",
+        interpro: "International Professional",
+        general: "General Public",
+        admin: "Admin",
+      };
+
+      // Send email (non-blocking; failure should not roll back DB change)
+      let emailSent = false;
+      try {
+        const { sendRoleChangedToStudentEmail } = await import("../../services/emailService.js");
+        await sendRoleChangedToStudentEmail(
+          updatedUser.email,
+          updatedUser.firstName,
+          updatedUser.middleName,
+          updatedUser.lastName,
+          roleLabelMap[previousRole] ?? previousRole,
+          roleLabelMap[targetRole] ?? targetRole,
+          reason,
+          targetLocale,
+        );
+        emailSent = true;
+      } catch (emailErr) {
+        fastify.log.error(
+          { err: emailErr, userId, email: updatedUser.email },
+          "Failed to send role-changed-to-student email",
+        );
+      }
+
+      fastify.log.info(
+        {
+          adminId: adminUser?.id,
+          targetUserId: userId,
+          previousRole,
+          newRole: targetRole,
+          emailSent,
+        },
+        "Member role converted to student with document resubmission request",
+      );
+
+      return reply.send({
+        success: true,
+        emailSent,
+        user: updatedUser,
+      });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: "Failed to request document verification",
+      });
+    }
+  });
+
+  // Impersonate Member (Admin only)
+  // Generates a one-time SSO token so an admin can log into the public web app as the target user.
+  fastify.post("/:id/impersonate", async (request, reply) => {
+    if (request.user.role !== "admin") {
+      return reply.status(403).send({
+        success: false,
+        error: "Only admins can impersonate users",
+      });
+    }
+
+    const { id } = request.params as { id: string };
+    const userId = parseInt(id);
+
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return reply.status(400).send({
+        success: false,
+        error: "Invalid user id",
+      });
+    }
+
+    try {
+      const [target] = await db
+        .select({
+          id: users.id,
+          email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          status: users.status,
+        })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+
+      if (!target) {
+        return reply.status(404).send({
+          success: false,
+          error: "User not found",
+        });
+      }
+
+      if (target.status !== "active") {
+        return reply.status(400).send({
+          success: false,
+          error: "Target user account is not active",
+        });
+      }
+
+      // Cleanup expired tokens (best-effort)
+      try {
+        await db.delete(ssoTokens).where(lt(ssoTokens.expiresAt, new Date()));
+      } catch (cleanupErr) {
+        fastify.log.warn({ err: cleanupErr }, "SSO token cleanup failed (non-fatal)");
+      }
+
+      const token = randomUUID();
+      const expiresAt = new Date(Date.now() + IMPERSONATE_TOKEN_EXPIRY_MS);
+
+      await db.insert(ssoTokens).values({
+        token,
+        userId: target.id,
+        eventId: null,
+        expiresAt,
+        sourceApp: "backoffice-impersonate",
+        targetApp: "accp-web",
+      });
+
+      fastify.log.info(
+        {
+          adminId: request.user.id,
+          adminEmail: request.user.email,
+          targetUserId: target.id,
+          targetEmail: target.email,
+        },
+        "Admin impersonation SSO token issued"
+      );
+
+      return reply.send({
+        success: true,
+        ssoToken: token,
+        targetUrl: DEFAULT_WEB_URL,
+        expiresInSeconds: Math.floor(IMPERSONATE_TOKEN_EXPIRY_MS / 1000),
+        user: {
+          id: target.id,
+          email: target.email,
+          firstName: target.firstName,
+          lastName: target.lastName,
+        },
+      });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({
+        success: false,
+        error: "Failed to generate impersonation token",
+      });
     }
   });
 

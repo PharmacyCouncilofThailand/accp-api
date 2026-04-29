@@ -8,6 +8,7 @@ import {
     registrationListSchema, updateRegistrationSchema,
     manualRegistrationSchema, addSessionsSchema,
     batchManualRegistrationSchema, checkRegisteredUsersSchema,
+    registrationStatsByCountrySchema,
 } from "../../schemas/registrations.schema.js";
 import { eq, desc, ilike, and, count, sql, or, inArray } from "drizzle-orm";
 
@@ -25,7 +26,7 @@ export default async function (fastify: FastifyInstance) {
             return reply.status(400).send({ error: "Invalid query", details: queryResult.error.flatten() });
         }
 
-        const { page, limit, search, eventId, status, ticketTypeId, source } = queryResult.data;
+        const { page, limit, search, eventId, status, ticketTypeId, source, country } = queryResult.data;
         const offset = (page - 1) * limit;
 
         // Get user from request (set by auth middleware)
@@ -63,6 +64,7 @@ export default async function (fastify: FastifyInstance) {
             if (status) conditions.push(eq(registrations.status, status));
             if (ticketTypeId) conditions.push(eq(registrations.ticketTypeId, ticketTypeId));
             if (source) conditions.push(eq(registrations.source, source));
+            if (country) conditions.push(eq(users.country, country));
             if (search) {
                 conditions.push(
                     or(
@@ -77,10 +79,11 @@ export default async function (fastify: FastifyInstance) {
 
             const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
-            // Count total
+            // Count total (need to join users for country filter to work in count too)
             const [{ totalCount }] = await db
                 .select({ totalCount: count() })
                 .from(registrations)
+                .leftJoin(users, eq(registrations.userId, users.id))
                 .where(whereClause);
 
             // Fetch data
@@ -101,11 +104,13 @@ export default async function (fastify: FastifyInstance) {
                     addedNote: registrations.addedNote,
                     addedByFirstName: backofficeUsers.firstName,
                     addedByLastName: backofficeUsers.lastName,
+                    userCountry: users.country,
                 })
                 .from(registrations)
                 .leftJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
                 .leftJoin(events, eq(registrations.eventId, events.id))
                 .leftJoin(backofficeUsers, eq(registrations.addedBy, backofficeUsers.id))
+                .leftJoin(users, eq(registrations.userId, users.id))
                 .where(whereClause)
                 .orderBy(desc(registrations.createdAt))
                 .limit(limit)
@@ -503,6 +508,77 @@ export default async function (fastify: FastifyInstance) {
         } catch (error) {
             fastify.log.error(error);
             return reply.status(500).send({ error: "Failed to add sessions" });
+        }
+    });
+
+    // ── Stats: Registrations grouped by Country ───────────
+    // Returns count of registrations per country (default: confirmed only).
+    // Restricts to staff-assigned events when not admin.
+    fastify.get("/stats/by-country", async (request, reply) => {
+        const queryResult = registrationStatsByCountrySchema.safeParse(request.query);
+        if (!queryResult.success) {
+            return reply.status(400).send({ error: "Invalid query", details: queryResult.error.flatten() });
+        }
+
+        const { eventId, status } = queryResult.data;
+        const user = (request as any).user;
+
+        try {
+            const conditions = [eq(registrations.status, status)];
+
+            // Restrict non-admin staff to assigned events only
+            if (user && user.role !== "admin") {
+                const assignments = await db
+                    .select({ eventId: staffEventAssignments.eventId })
+                    .from(staffEventAssignments)
+                    .where(eq(staffEventAssignments.staffId, user.id));
+
+                const assignedEventIds = assignments.map((a) => a.eventId);
+                if (assignedEventIds.length === 0) {
+                    return reply.send({ total: 0, withCountry: 0, unknown: 0, byCountry: [] });
+                }
+                conditions.push(inArray(registrations.eventId, assignedEventIds));
+            }
+
+            if (eventId) conditions.push(eq(registrations.eventId, eventId));
+
+            const whereClause = and(...conditions);
+
+            // Group by country (NULL/empty grouped as "Unknown")
+            const rows = await db
+                .select({
+                    country: users.country,
+                    count: count(),
+                })
+                .from(registrations)
+                .leftJoin(users, eq(registrations.userId, users.id))
+                .where(whereClause)
+                .groupBy(users.country)
+                .orderBy(desc(count()));
+
+            let total = 0;
+            let unknown = 0;
+            const byCountry: { country: string; count: number }[] = [];
+
+            for (const row of rows) {
+                const c = Number(row.count);
+                total += c;
+                if (!row.country || row.country.trim() === "") {
+                    unknown += c;
+                } else {
+                    byCountry.push({ country: row.country, count: c });
+                }
+            }
+
+            return reply.send({
+                total,
+                withCountry: total - unknown,
+                unknown,
+                byCountry,
+            });
+        } catch (error) {
+            fastify.log.error(error);
+            return reply.status(500).send({ error: "Failed to fetch country stats" });
         }
     });
 

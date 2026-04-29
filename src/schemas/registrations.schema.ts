@@ -8,6 +8,12 @@ export const registrationListSchema = z.object({
     status: z.enum(['confirmed', 'cancelled']).optional(),
     ticketTypeId: z.coerce.number().optional(),
     source: z.enum(['purchase', 'manual', 'free']).optional(),
+    country: z.string().optional(),
+});
+
+export const registrationStatsByCountrySchema = z.object({
+    eventId: z.coerce.number().optional(),
+    status: z.enum(['confirmed', 'cancelled']).default('confirmed'),
 });
 
 export const updateRegistrationSchema = z.object({
