@@ -346,7 +346,7 @@ export default async function (fastify: FastifyInstance) {
         } catch (emailError) {
           fastify.log.error(
             { err: emailError },
-            "Failed to send abstract status email",
+            `Failed to send abstract status email for abstract ${id} (${updatedAbstract.trackingId})`,
           );
         }
       }
