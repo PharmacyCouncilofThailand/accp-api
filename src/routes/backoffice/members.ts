@@ -14,8 +14,9 @@ import {
   passwordResetTokens,
   verificationRejectionHistory,
   ssoTokens,
+  ticketTypes,
 } from "../../database/schema.js";
-import { eq, desc, ilike, or, count, and, SQL, inArray, exists, ne, lt } from "drizzle-orm";
+import { eq, desc, ilike, or, count, and, SQL, inArray, exists, notExists, ne, lt } from "drizzle-orm";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
@@ -35,6 +36,7 @@ const listMembersQuerySchema = z.object({
   role: z.enum(["thstd", "interstd", "thpro", "interpro", "general", "admin"]).optional(),
   status: z.enum(["pending_approval", "active", "rejected"]).optional(),
   eventId: z.coerce.number().int().positive().optional(),
+  country: z.string().optional(),
 });
 
 export default async function (fastify: FastifyInstance) {
@@ -45,7 +47,7 @@ export default async function (fastify: FastifyInstance) {
       return reply.status(400).send({ error: "Invalid query", details: queryResult.error.flatten() });
     }
 
-    const { page, limit, search, role, status, eventId } = queryResult.data;
+    const { page, limit, search, role, status, eventId, country } = queryResult.data;
     const offset = (page - 1) * limit;
 
     try {
@@ -74,6 +76,11 @@ export default async function (fastify: FastifyInstance) {
               ))
           )
         );
+      }
+
+      // Filter by country
+      if (country) {
+        conditions.push(eq(users.country, country));
       }
 
       // Search by name or email
@@ -205,6 +212,132 @@ export default async function (fastify: FastifyInstance) {
     } catch (error) {
       fastify.log.error(error);
       return reply.status(500).send({ error: "Failed to fetch stats" });
+    }
+  });
+
+  // ── Stats: Members WITHOUT primary ticket grouped by Country ──
+  // Returns members who have NOT purchased a confirmed primary ticket for the given event
+  fastify.get("/stats/by-country/no-primary-ticket", async (request, reply) => {
+    const querySchema = z.object({
+      eventId: z.coerce.number().int().positive(),
+      role: z.enum(["thstd", "interstd", "thpro", "interpro", "general", "admin"]).optional(),
+      status: z.enum(["pending_approval", "active", "rejected"]).optional(),
+    });
+
+    const parsed = querySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Invalid query", details: parsed.error.flatten() });
+    }
+
+    const { eventId, role, status } = parsed.data;
+
+    try {
+      const conditions: SQL[] = [
+        notExists(
+          db.select({ id: registrations.id })
+            .from(registrations)
+            .innerJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
+            .where(and(
+              eq(registrations.userId, users.id),
+              eq(registrations.eventId, eventId),
+              eq(registrations.status, "confirmed"),
+              eq(ticketTypes.category, "primary"),
+            ))
+        ),
+      ];
+      if (role) conditions.push(eq(users.role, role));
+      if (status) conditions.push(eq(users.status, status));
+
+      const rows = await db
+        .select({
+          country: users.country,
+          count: count(),
+        })
+        .from(users)
+        .where(and(...conditions))
+        .groupBy(users.country)
+        .orderBy(desc(count()));
+
+      let total = 0;
+      let unknown = 0;
+      const byCountry: { country: string; count: number }[] = [];
+
+      for (const row of rows) {
+        const c = Number(row.count);
+        total += c;
+        if (!row.country || row.country.trim() === "") {
+          unknown += c;
+        } else {
+          byCountry.push({ country: row.country, count: c });
+        }
+      }
+
+      return reply.send({
+        total,
+        withCountry: total - unknown,
+        unknown,
+        byCountry,
+      });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ error: "Failed to fetch country stats" });
+    }
+  });
+
+  // ── Stats: Members grouped by Country ───────────
+  fastify.get("/stats/by-country", async (request, reply) => {
+    const querySchema = z.object({
+      role: z.enum(["thstd", "interstd", "thpro", "interpro", "general", "admin"]).optional(),
+      status: z.enum(["pending_approval", "active", "rejected"]).optional(),
+    });
+
+    const parsed = querySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: "Invalid query", details: parsed.error.flatten() });
+    }
+
+    const { role, status } = parsed.data;
+
+    try {
+      const conditions: SQL[] = [];
+      if (role) conditions.push(eq(users.role, role));
+      if (status) conditions.push(eq(users.status, status));
+
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+      const rows = await db
+        .select({
+          country: users.country,
+          count: count(),
+        })
+        .from(users)
+        .where(whereClause)
+        .groupBy(users.country)
+        .orderBy(desc(count()));
+
+      let total = 0;
+      let unknown = 0;
+      const byCountry: { country: string; count: number }[] = [];
+
+      for (const row of rows) {
+        const c = Number(row.count);
+        total += c;
+        if (!row.country || row.country.trim() === "") {
+          unknown += c;
+        } else {
+          byCountry.push({ country: row.country, count: c });
+        }
+      }
+
+      return reply.send({
+        total,
+        withCountry: total - unknown,
+        unknown,
+        byCountry,
+      });
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.status(500).send({ error: "Failed to fetch country stats" });
     }
   });
 
