@@ -3,7 +3,7 @@ import { registerBodySchema } from "../../schemas/auth.schema.js";
 import { db } from "../../database/index.js";
 import { users, events } from "../../database/schema.js";
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { uploadToGoogleDrive } from "../../services/googleDrive.js";
 import { sendPendingApprovalEmail, sendSignupNotificationEmail } from "../../services/emailService.js";
 import { sendEventSignupNotificationEmail, sendEventPendingApprovalEmail } from "../../services/emailTemplates.js";
@@ -117,11 +117,11 @@ export async function authRoutes(fastify: FastifyInstance) {
         }
       }
 
-      // 1. Check duplicate email
+      // 1. Check duplicate email (case-insensitive — email is lowercased by schema)
       const existingUser = await db
         .select()
         .from(users)
-        .where(eq(users.email, email))
+        .where(sql`LOWER(${users.email}) = ${email}`)
         .limit(1);
 
       if (existingUser.length > 0) {

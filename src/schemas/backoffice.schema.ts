@@ -1,7 +1,10 @@
 import { z } from "zod";
 
 export const backofficeLoginSchema = z.object({
-  email: z.string().email("Invalid email address"),
+  email: z
+    .string()
+    .email("Invalid email address")
+    .transform((v) => v.trim().toLowerCase()),
   password: z.string().min(1, "Password is required"),
 });
 

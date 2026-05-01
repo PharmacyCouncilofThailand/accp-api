@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
 import { users } from "../../database/schema.js";
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { uploadToGoogleDrive } from "../../services/googleDrive.js";
 import { sendDocumentResubmittedEmail } from "../../services/emailService.js";
 import z from "zod";
@@ -19,7 +19,10 @@ const ALLOWED_MIME_TYPES = [
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 const resubmitSchema = z.object({
-  email: z.string().email("Invalid email format"),
+  email: z
+    .string()
+    .email("Invalid email format")
+    .transform((v) => v.trim().toLowerCase()),
   password: z.string().min(1, "Password is required"),
 });
 
@@ -88,11 +91,11 @@ export default async function (fastify: FastifyInstance) {
         });
       }
 
-      // 1. Find user by email
+      // 1. Find user by email (case-insensitive — email is lowercased by schema)
       const userList = await db
         .select()
         .from(users)
-        .where(eq(users.email, email))
+        .where(sql`LOWER(${users.email}) = ${email}`)
         .limit(1);
 
       if (userList.length === 0) {

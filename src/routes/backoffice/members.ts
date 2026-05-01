@@ -16,7 +16,7 @@ import {
   ssoTokens,
   ticketTypes,
 } from "../../database/schema.js";
-import { eq, desc, ilike, or, count, and, SQL, inArray, exists, notExists, ne, lt } from "drizzle-orm";
+import { eq, desc, ilike, or, count, and, SQL, inArray, exists, notExists, ne, lt, sql } from "drizzle-orm";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
@@ -344,7 +344,10 @@ export default async function (fastify: FastifyInstance) {
   // Create Member
   fastify.post("", async (request, reply) => {
     const createSchema = z.object({
-      email: z.string().email(),
+      email: z
+        .string()
+        .email()
+        .transform((v) => v.trim().toLowerCase()),
       password: z.string().min(6),
       firstName: z.string().min(1).max(100),
       middleName: z.string().max(100).optional().nullable(),
@@ -368,8 +371,8 @@ export default async function (fastify: FastifyInstance) {
     const { password, ...data } = parsed.data;
 
     try {
-      // Check duplicate email
-      const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.email, data.email));
+      // Check duplicate email (case-insensitive — email is lowercased by schema)
+      const [existing] = await db.select({ id: users.id }).from(users).where(sql`LOWER(${users.email}) = ${data.email}`);
       if (existing) {
         return reply.status(409).send({ error: "Email already exists" });
       }
@@ -416,7 +419,11 @@ export default async function (fastify: FastifyInstance) {
     const userId = parseInt(id);
 
     const updateSchema = z.object({
-      email: z.string().email().optional(),
+      email: z
+        .string()
+        .email()
+        .transform((v) => v.trim().toLowerCase())
+        .optional(),
       password: z.string().min(6).optional(),
       firstName: z.string().min(1).max(100).optional(),
       middleName: z.string().max(100).optional().nullable(),
@@ -444,12 +451,12 @@ export default async function (fastify: FastifyInstance) {
         return reply.status(404).send({ error: "Member not found" });
       }
 
-      // Check duplicate email if email is being changed
+      // Check duplicate email if email is being changed (case-insensitive)
       if (parsed.data.email) {
         const [emailExists] = await db
           .select({ id: users.id })
           .from(users)
-          .where(and(eq(users.email, parsed.data.email), ne(users.id, userId)));
+          .where(and(sql`LOWER(${users.email}) = ${parsed.data.email}`, ne(users.id, userId)));
         if (emailExists) {
           return reply.status(409).send({ error: "Email already exists" });
         }

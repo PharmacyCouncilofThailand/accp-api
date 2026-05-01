@@ -8,9 +8,9 @@ import {
     registrationListSchema, updateRegistrationSchema,
     manualRegistrationSchema, addSessionsSchema,
     batchManualRegistrationSchema, checkRegisteredUsersSchema,
-    registrationStatsByCountrySchema,
+    registrationStatsByCountrySchema, registrationStatsByAddonSchema,
 } from "../../schemas/registrations.schema.js";
-import { eq, desc, ilike, and, count, sql, or, inArray } from "drizzle-orm";
+import { eq, desc, ilike, and, count, sql, or, inArray, exists, notExists } from "drizzle-orm";
 
 function generateRegCode(): string {
     const ts = Date.now().toString(36).toUpperCase();
@@ -579,6 +579,94 @@ export default async function (fastify: FastifyInstance) {
         } catch (error) {
             fastify.log.error(error);
             return reply.status(500).send({ error: "Failed to fetch country stats" });
+        }
+    });
+
+    // ── Stats: Add-on breakdown (Gala / Workshop / Ticket Only) ──
+    // Returns counts of confirmed registrations per add-on group:
+    //   - gala:       has at least one confirmed Gala add-on
+    //   - workshop:   has at least one confirmed Workshop add-on
+    //   - ticketOnly: has NO add-on at all (primary ticket only)
+    //   - total:      total confirmed registrations for the event
+    fastify.get("/stats/by-addon", async (request, reply) => {
+        const queryResult = registrationStatsByAddonSchema.safeParse(request.query);
+        if (!queryResult.success) {
+            return reply.status(400).send({ error: "Invalid query", details: queryResult.error.flatten() });
+        }
+
+        const { eventId, status } = queryResult.data;
+        const user = (request as any).user;
+
+        try {
+            const conditions = [
+                eq(registrations.eventId, eventId),
+                eq(registrations.status, status),
+            ];
+
+            // Restrict non-admin staff to assigned events only
+            if (user && user.role !== "admin") {
+                const assignments = await db
+                    .select({ eventId: staffEventAssignments.eventId })
+                    .from(staffEventAssignments)
+                    .where(eq(staffEventAssignments.staffId, user.id));
+
+                const assignedEventIds = assignments.map((a) => a.eventId);
+                if (assignedEventIds.length === 0 || !assignedEventIds.includes(eventId)) {
+                    return reply.send({ total: 0, gala: 0, workshop: 0, ticketOnly: 0 });
+                }
+            }
+
+            // EXISTS subquery factory: registration has at least one add-on of given groupName
+            const hasAddonGroup = (groupNameLower: string) =>
+                exists(
+                    db.select({ id: registrationSessions.id })
+                        .from(registrationSessions)
+                        .innerJoin(ticketTypes, eq(registrationSessions.ticketTypeId, ticketTypes.id))
+                        .where(and(
+                            eq(registrationSessions.registrationId, registrations.id),
+                            eq(ticketTypes.category, "addon"),
+                            sql`LOWER(${ticketTypes.groupName}) = ${groupNameLower}`,
+                        ))
+                );
+
+            // NOT EXISTS: registration has no add-on at all
+            const hasNoAddon = notExists(
+                db.select({ id: registrationSessions.id })
+                    .from(registrationSessions)
+                    .innerJoin(ticketTypes, eq(registrationSessions.ticketTypeId, ticketTypes.id))
+                    .where(and(
+                        eq(registrationSessions.registrationId, registrations.id),
+                        eq(ticketTypes.category, "addon"),
+                    ))
+            );
+
+            const baseWhere = and(...conditions);
+
+            // Run all 4 counts in parallel
+            const [totalRow, galaRow, workshopRow, ticketOnlyRow] = await Promise.all([
+                db.select({ c: count() })
+                    .from(registrations)
+                    .where(baseWhere),
+                db.select({ c: count() })
+                    .from(registrations)
+                    .where(and(baseWhere, hasAddonGroup("gala"))),
+                db.select({ c: count() })
+                    .from(registrations)
+                    .where(and(baseWhere, hasAddonGroup("workshop"))),
+                db.select({ c: count() })
+                    .from(registrations)
+                    .where(and(baseWhere, hasNoAddon)),
+            ]);
+
+            return reply.send({
+                total: Number(totalRow[0]?.c ?? 0),
+                gala: Number(galaRow[0]?.c ?? 0),
+                workshop: Number(workshopRow[0]?.c ?? 0),
+                ticketOnly: Number(ticketOnlyRow[0]?.c ?? 0),
+            });
+        } catch (error) {
+            fastify.log.error(error);
+            return reply.status(500).send({ error: "Failed to fetch add-on stats" });
         }
     });
 

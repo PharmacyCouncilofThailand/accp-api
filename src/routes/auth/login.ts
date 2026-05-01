@@ -3,7 +3,7 @@ import { db } from "../../database/index.js";
 import { users } from "../../database/schema.js";
 import { loginBodySchema } from "../../schemas/auth.schema.js";
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { verifyRecaptcha, isRecaptchaEnabled } from "../../utils/recaptcha.js";
 import { JWT_EXPIRY } from "../../constants/auth.js";
 import { getFullName } from "../../utils/name.js";
@@ -42,9 +42,11 @@ export default async function (fastify: FastifyInstance) {
 
     try {
       // 2. Find user (by email OR pharmacyLicenseId based on what is provided)
+      // Email lookup is case-insensitive so legacy mixed-case rows still match
+      // (the incoming email is already lowercased by the Zod schema).
       let userQuery = db.select().from(users);
       if (email) {
-        userQuery = userQuery.where(eq(users.email, email)) as any;
+        userQuery = userQuery.where(sql`LOWER(${users.email}) = ${email}`) as any;
       } else if (pharmacyLicenseId) {
         userQuery = userQuery.where(eq(users.pharmacyLicenseId, pharmacyLicenseId)) as any;
       }
