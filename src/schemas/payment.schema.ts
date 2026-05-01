@@ -10,20 +10,12 @@ export const createPaymentIntentSchema = z.object({
   workshopSessionId: z.number().int().positive().optional(),
   needTaxInvoice: z.boolean().optional().default(false),
   taxName: z.string().trim().max(200).optional(),
-  taxId: z
-    .string()
-    .trim()
-    .regex(/^\d{13}$/)
-    .optional(),
+  taxId: z.string().trim().min(1).max(50).optional(),
   taxAddress: z.string().trim().max(500).optional(),
   taxSubDistrict: z.string().trim().max(100).optional(),
   taxDistrict: z.string().trim().max(100).optional(),
   taxProvince: z.string().trim().max(100).optional(),
-  taxPostalCode: z
-    .string()
-    .trim()
-    .regex(/^\d{5}$/)
-    .optional(),
+  taxPostalCode: z.string().trim().min(1).max(20).optional(),
 }).superRefine((data, ctx) => {
   if (!data.needTaxInvoice) return;
 

@@ -1835,7 +1835,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             return reply.status(400).send({
               success: false,
               code: "INVALID_TAX_ID",
-              error: "Tax ID is required and must be 13 digits",
+              error: "Tax ID / VAT number is required",
             });
           }
 
