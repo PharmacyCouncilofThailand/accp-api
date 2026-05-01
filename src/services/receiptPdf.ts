@@ -250,12 +250,13 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<PassThrough
   const stream = new PassThrough();
   doc.pipe(stream);
 
-  // ── Register Arial fonts (to match Puppeteer rendering) ───────────────
-  const fontDir = path.join(process.cwd(), "public", "Font", "arial");
-  doc.registerFont("Arial", path.join(fontDir, "ARIAL.TTF"));
-  doc.registerFont("Arial-Bold", path.join(fontDir, "ARIALBD.TTF"));
-  doc.registerFont("Arial-Italic", path.join(fontDir, "ARIALI.TTF"));
-  doc.registerFont("Arial-BoldItalic", path.join(fontDir, "ARIALBI.TTF"));
+  // ── Register Sarabun fonts (supports Latin + Thai scripts) ────────────
+  // Sarabun is the Thai government-standard font (SIL OFL licensed) and
+  // renders both English and Thai correctly in PDFKit, unlike the bundled
+  // Arial files which lack Thai glyphs.
+  const fontDir = path.join(process.cwd(), "public", "Font", "sarabun");
+  doc.registerFont("Sarabun", path.join(fontDir, "Sarabun-Regular.ttf"));
+  doc.registerFont("Sarabun-Bold", path.join(fontDir, "Sarabun-Bold.ttf"));
 
   // ── Layout constants (mirrors the HTML template) ──────────────────────
   const PAGE_W = doc.page.width;         // A4: 595.28 pt
@@ -277,18 +278,18 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<PassThrough
   // ── Header Section (centered) ─────────────────────────────────────────
   // Note: PDFKit uses pt (72 dpi), HTML uses px (96 dpi). 1pt = 1.333px, so
   // multiply HTML px values by 0.75 to get equivalent pt size.
-  doc.font("Arial-Bold").fontSize(22).fillColor(C_BLACK); // HTML 30px ≈ 22pt
+  doc.font("Sarabun-Bold").fontSize(22).fillColor(C_BLACK); // HTML 30px ≈ 22pt
   doc.text("ACCP 2026", MARGIN_X, y, { width: CONTENT_W, align: "center" });
   y = doc.y + 4;
 
-  doc.font("Arial").fontSize(16).fillColor(C_BLACK); // HTML 22px ≈ 16pt
+  doc.font("Sarabun").fontSize(16).fillColor(C_BLACK); // HTML 22px ≈ 16pt
   doc.text("25th Asian Conference on Clinical Pharmacy", MARGIN_X, y, {
     width: CONTENT_W,
     align: "center",
   });
   y = doc.y + 4;
 
-  doc.font("Arial").fontSize(10).fillColor(C_BODY); // HTML 14px ≈ 10pt
+  doc.font("Sarabun").fontSize(10).fillColor(C_BODY); // HTML 14px ≈ 10pt
   doc.text("July 9-11, 2026 | Centara Grand, Bangkok, Thailand", MARGIN_X, y, {
     width: CONTENT_W,
     align: "center",
@@ -296,7 +297,7 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<PassThrough
   y = doc.y + 22;
 
   // ── Title ─────────────────────────────────────────────────────────────
-  doc.font("Arial-Bold").fontSize(13).fillColor(C_BLACK); // HTML h3 ≈ 13pt
+  doc.font("Sarabun-Bold").fontSize(13).fillColor(C_BLACK); // HTML h3 ≈ 13pt
   doc.text("PAYMENT RECEIPT", MARGIN_X, y, {
     width: CONTENT_W,
     align: "center",
@@ -312,12 +313,12 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<PassThrough
   const gridStartY = y;
 
   const drawLabel = (text: string, x: number, yy: number) => {
-    doc.font("Arial-Bold").fontSize(10).fillColor(C_BLACK);
+    doc.font("Sarabun-Bold").fontSize(10).fillColor(C_BLACK);
     doc.text(text, x, yy, { width: colW });
     return doc.y;
   };
   const drawValue = (text: string, x: number, yy: number) => {
-    doc.font("Arial").fontSize(10).fillColor(C_MUTED);
+    doc.font("Sarabun").fontSize(10).fillColor(C_MUTED);
     doc.text(text, x, yy, { width: colW });
     return doc.y;
   };
@@ -354,7 +355,7 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<PassThrough
   };
 
   // Table header (HTML th has padding: 10px 0 → 7.5pt top + 7.5pt bottom)
-  doc.font("Arial-Bold").fontSize(10).fillColor(C_BLACK);
+  doc.font("Sarabun-Bold").fontSize(10).fillColor(C_BLACK);
   doc.text("DESCRIPTION", tbl.desc.x, y, { width: tbl.desc.w });
   doc.text("QTY", tbl.qty.x, y, { width: tbl.qty.w, align: "center" });
   doc.text("UNIT PRICE", tbl.unit.x, y, { width: tbl.unit.w, align: "right" });
@@ -367,7 +368,7 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<PassThrough
   y += 10; // HTML td padding-top 10px = 7.5pt + border gap
 
   // Item rows (HTML td padding: 10px 0 → 7.5pt top + 7.5pt bottom between rows)
-  doc.font("Arial").fontSize(10).fillColor(C_BLACK);
+  doc.font("Sarabun").fontSize(10).fillColor(C_BLACK);
   for (const item of data.items) {
     const rowStartY = y;
     // Description may wrap, so render it first and capture end Y
@@ -403,7 +404,7 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<PassThrough
   const totalsValueW = CONTENT_W * 0.3;
 
   const printTotalRow = (label: string, value: string, isTotal = false) => {
-    const fontName = isTotal ? "Arial-Bold" : "Arial";
+    const fontName = isTotal ? "Sarabun-Bold" : "Sarabun";
     const size = isTotal ? 12 : 10; // HTML 16px ≈ 12pt
     doc.font(fontName).fontSize(size).fillColor(C_BLACK);
     const rowY = y;
@@ -439,7 +440,7 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<PassThrough
   doc.strokeColor(C_BORDER_FAINT).lineWidth(0.5);
   doc.moveTo(MARGIN_X, footerY).lineTo(MARGIN_X + CONTENT_W, footerY).stroke();
 
-  doc.font("Arial").fontSize(9).fillColor(C_FOOTER);
+  doc.font("Sarabun").fontSize(9).fillColor(C_FOOTER);
   doc.text(
     "This receipt was generated by the ACCP 2026 Conference System.",
     MARGIN_X,

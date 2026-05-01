@@ -8,7 +8,7 @@ import {
 } from "../../database/schema.js";
 import { backofficeLoginSchema } from "../../schemas/backoffice.schema.js";
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { JWT_EXPIRY } from "../../constants/auth.js";
 
 export default async function (fastify: FastifyInstance) {
@@ -34,11 +34,11 @@ export default async function (fastify: FastifyInstance) {
     const { email, password } = result.data;
 
     try {
-      // 2. Find staff user
+      // 2. Find staff user (case-insensitive — email is lowercased by schema)
       const staffList = await db
         .select()
         .from(backofficeUsers)
-        .where(eq(backofficeUsers.email, email))
+        .where(sql`LOWER(${backofficeUsers.email}) = ${email}`)
         .limit(1);
 
 

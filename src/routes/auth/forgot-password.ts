@@ -2,7 +2,7 @@ import { FastifyInstance } from "fastify";
 import { db } from "../../database/index.js";
 import { users, passwordResetTokens } from "../../database/schema.js";
 import { forgotPasswordSchema } from "../../schemas/auth.schema.js";
-import { eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import crypto from "crypto";
 import { sendPasswordResetEmail } from "../../services/emailService.js";
 import { verifyRecaptcha, isRecaptchaEnabled } from "../../utils/recaptcha.js";
@@ -40,11 +40,11 @@ export default async function (fastify: FastifyInstance) {
     }
 
     try {
-      // 2. Find user by email
+      // 2. Find user by email (case-insensitive — email is lowercased by schema)
       const userList = await db
         .select()
         .from(users)
-        .where(eq(users.email, email))
+        .where(sql`LOWER(${users.email}) = ${email}`)
         .limit(1);
 
       if (userList.length === 0) {

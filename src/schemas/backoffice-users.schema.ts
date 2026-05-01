@@ -13,8 +13,15 @@ const abstractCategoryEnum = z.enum([
 // Valid presentation types for reviewer assignment
 const presentationTypeEnum = z.enum(["oral", "poster"]);
 
+// Normalized email: trim + lowercase to avoid mixed-case duplicates and
+// enable case-insensitive lookups against legacy data.
+const emailField = z
+  .string()
+  .email()
+  .transform((v) => v.trim().toLowerCase());
+
 export const createUserSchema = z.object({
-  email: z.string().email(),
+  email: emailField,
   password: z.string().min(6),
   firstName: z.string().min(1),
   lastName: z.string().min(1),
@@ -33,7 +40,7 @@ export const updateUserSchema = z.object({
     .optional(),
   isActive: z.boolean().optional(),
   password: z.string().min(6).optional(),
-  email: z.string().email().optional(),
+  email: emailField.optional(),
   // For reviewers: categories they can review
   assignedCategories: z.array(abstractCategoryEnum).optional(),
   // For reviewers: presentation types they can review

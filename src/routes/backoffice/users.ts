@@ -13,7 +13,7 @@ import {
   assignEventsAndSessionsSchema,
 } from "../../schemas/backoffice-users.schema.js";
 import bcrypt from "bcryptjs";
-import { eq, desc, ne, and, ilike, or, count, SQL } from "drizzle-orm";
+import { eq, desc, ne, and, ilike, or, count, SQL, sql } from "drizzle-orm";
 import { BCRYPT_ROUNDS } from "../../constants/auth.js";
 import { z } from "zod";
 
@@ -156,7 +156,7 @@ export default async function (fastify: FastifyInstance) {
       const existingUser = await db
         .select()
         .from(backofficeUsers)
-        .where(eq(backofficeUsers.email, email))
+        .where(sql`LOWER(${backofficeUsers.email}) = ${email}`)
         .limit(1);
 
       if (existingUser.length > 0) {
@@ -197,14 +197,14 @@ export default async function (fastify: FastifyInstance) {
 
     const updates: Record<string, unknown> = { ...result.data };
 
-    // Check email uniqueness if email is being updated
+    // Check email uniqueness if email is being updated (case-insensitive)
     if (updates.email) {
       const existingUser = await db
         .select()
         .from(backofficeUsers)
         .where(
           and(
-            eq(backofficeUsers.email, updates.email as string),
+            sql`LOWER(${backofficeUsers.email}) = ${updates.email as string}`,
             ne(backofficeUsers.id, parseInt(id)),
           ),
         )

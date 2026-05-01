@@ -1,10 +1,17 @@
 import { z } from "zod";
 
+// Email is normalized (trim + lowercase) so DB lookups are case-insensitive
+// and we never store mixed-case duplicates.
+const emailField = z
+  .string()
+  .email("Invalid email address")
+  .transform((v) => v.trim().toLowerCase());
+
 export const registerBodySchema = z.object({
   firstName: z.string().min(1, "First name is required"),
   middleName: z.string().optional(),
   lastName: z.string().min(1, "Last name is required"),
-  email: z.string().email("Invalid email address"),
+  email: emailField,
   password: z.string().min(6, "Password must be at least 6 characters"),
   accountType: z.enum([
     "thaiStudent",
@@ -27,7 +34,7 @@ export const registerBodySchema = z.object({
 });
 
 export const loginBodySchema = z.object({
-  email: z.string().email("Invalid email address").optional(),
+  email: emailField.optional(),
   pharmacyLicenseId: z.string().optional(),
   password: z.string().min(1, "Password is required"),
   recaptchaToken: z.string().optional(),
@@ -39,7 +46,7 @@ export type RegisterInput = z.infer<typeof registerBodySchema>;
 
 // Forgot Password Schema
 export const forgotPasswordSchema = z.object({
-  email: z.string().email("Invalid email address"),
+  email: emailField,
   recaptchaToken: z.string().optional(),
 });
 
