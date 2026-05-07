@@ -279,7 +279,7 @@ export default async function (fastify: FastifyInstance) {
     try {
       const [updatedAbstract] = await db
         .update(abstracts)
-        .set({ status })
+        .set({ status, updatedAt: new Date() })
         .where(eq(abstracts.id, parseInt(id)))
         .returning();
 

@@ -28,8 +28,9 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Install postgresql-client for health checks and Chromium for puppeteer
-# Include dependencies required by Chromium: nss, freetype, harfbuzz, ca-certificates, ttf-freefont
+# Install postgresql-client for health checks, Chromium for puppeteer,
+# LibreOffice for DOCX→PDF conversion (invitation letter), and Thai fonts
+# so Thai/embedded fonts render correctly inside the generated PDF.
 RUN apk add --no-cache \
     postgresql-client \
     chromium \
@@ -38,6 +39,12 @@ RUN apk add --no-cache \
     harfbuzz \
     ca-certificates \
     ttf-freefont \
+    libreoffice \
+    libreoffice-common \
+    msttcorefonts-installer \
+    fontconfig \
+    && update-ms-fonts \
+    && fc-cache -f \
     && rm -rf /var/cache/apk/*
 
 # Copy built files and dependencies

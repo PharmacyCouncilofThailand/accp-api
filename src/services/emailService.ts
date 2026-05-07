@@ -74,18 +74,44 @@ async function getAccessToken(): Promise<string> {
 }
 
 /**
+ * Attachment to include with an outgoing email.
+ * Sent to NipaMail as `attachments[].type = "RAW"` with base64-encoded content.
+ */
+export interface EmailAttachment {
+  /** Raw file bytes (e.g. PDF buffer) */
+  content: Buffer;
+  /** Filename shown to the recipient, including extension */
+  fileName: string;
+}
+
+/**
+ * Build the NipaMail `attachments` array from our internal EmailAttachment[].
+ * Returns undefined (not an empty array) so the field is omitted when empty.
+ */
+function toNipaAttachments(attachments?: EmailAttachment[]) {
+  if (!attachments || attachments.length === 0) return undefined;
+  return attachments.map((a) => ({
+    type: "RAW" as const,
+    content: a.content.toString("base64"),
+    file_name: a.fileName,
+  }));
+}
+
+/**
  * Send email via NipaMail API
  */
 async function sendNipaMailEmail(
   recipient: string,
   subject: string,
   text: string,
+  attachments?: EmailAttachment[],
   retryOnAuth: boolean = true
 ): Promise<void> {
   const token = await getAccessToken();
 
   // Convert plain text newlines to HTML line breaks for proper display
   const htmlContent = text.replace(/\n/g, '<br>\n');
+  const nipaAttachments = toNipaAttachments(attachments);
 
   try {
     await axios.post(
@@ -97,6 +123,7 @@ async function sendNipaMailEmail(
           recipient: recipient,
           subject: subject,
           html: encodeToBase64(htmlContent),
+          ...(nipaAttachments ? { attachments: nipaAttachments } : {}),
         },
       },
       {
@@ -114,7 +141,7 @@ async function sendNipaMailEmail(
       error.response?.status === 401
     ) {
       cachedToken = null; // Clear cache
-      return sendNipaMailEmail(recipient, subject, text, false);
+      return sendNipaMailEmail(recipient, subject, text, attachments, false);
     }
 
     if (axios.isAxiosError(error) && error.response) {
@@ -381,7 +408,11 @@ Bangkok Thailand
   `.trim();
 
   try {
-    await sendNipaMailEmail(email, "Congratulations! Abstract Accepted (Poster) - 25th ACCP 2026", plainText);
+    await sendNipaMailEmail(
+      email,
+      "Congratulations! Abstract Accepted (Poster) - 25th ACCP 2026",
+      plainText
+    );
     console.log(`Abstract accepted (poster) email sent to ${email}`);
   } catch (error) {
     console.error("Error sending abstract accepted poster email:", error);
@@ -420,7 +451,11 @@ Bangkok Thailand
   `.trim();
 
   try {
-    await sendNipaMailEmail(email, "Congratulations! Abstract Accepted (Oral) - 25th ACCP 2026", plainText);
+    await sendNipaMailEmail(
+      email,
+      "Congratulations! Abstract Accepted (Oral) - 25th ACCP 2026",
+      plainText
+    );
     console.log(`Abstract accepted (oral) email sent to ${email}`);
   } catch (error) {
     console.error("Error sending abstract accepted oral email:", error);
@@ -903,8 +938,14 @@ Bangkok Thailand
   }
 
   try {
-    await sendNipaMailHtml(email, `Payment Receipt - ${orderNumber} | 25th ACCP 2026`, htmlContent);
-    console.log(`Payment receipt email sent to ${email} for order ${orderNumber}`);
+    await sendNipaMailHtml(
+      email,
+      `Payment Receipt - ${orderNumber} | 25th ACCP 2026`,
+      htmlContent
+    );
+    console.log(
+      `Payment receipt email sent to ${email} for order ${orderNumber}`,
+    );
   } catch (error) {
     console.error("Error sending payment receipt email:", error);
     throw error;
@@ -1019,6 +1060,137 @@ export function buildPaymentReceiptEmailContent(
 
   const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Email Preview</title></head><body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif;"><div style="max-width:600px;margin:24px auto;background:#fff;border-radius:8px;padding:32px 40px;box-shadow:0 2px 8px rgba(0,0,0,0.08);"><div style="color:#374151;font-size:14px;line-height:1.8;">${htmlContent}</div><hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;"><p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">25th ACCP Annual Conference 2026 · Bangkok, Thailand</p></div></body></html>`;
   return { subject: `Payment Receipt - ${orderNumber} | 25th ACCP 2026`, html: fullHtml };
+}
+
+// ============================================
+// APPROVAL REQUEST LETTER (manual send only)
+// Sent to paid attendees, with the invitation letter PDF attached.
+// ============================================
+
+const APPROVAL_REQUEST_PLAIN_TEXT = (recipientName: string) => `Dear ${recipientName},
+
+Approval Request Letter
+
+Following your successful registration for the ACCP 2026 conference and the subsequent issuance of your receipt and E-Ticket, the Organizing Committee is pleased to provide you with the official approval letter for your attendance at the said conference. Please find the details in the attached document.
+
+Sincerely,
+25th ACCP committee
+Bangkok Thailand`;
+
+export function buildApprovalRequestEmailContent(
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+): { subject: string; html: string } {
+  const plainText = APPROVAL_REQUEST_PLAIN_TEXT(getFullName(firstName, middleName, lastName));
+  return {
+    subject: "Approval Request Letter - 25th ACCP 2026",
+    html: buildEmailHtmlFromText(plainText),
+  };
+}
+
+export async function sendApprovalRequestEmail(
+  email: string,
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  attachment?: { pdf: Buffer; fileName: string },
+): Promise<void> {
+  const plainText = APPROVAL_REQUEST_PLAIN_TEXT(getFullName(firstName, middleName, lastName));
+  const attachments: EmailAttachment[] | undefined = attachment
+    ? [{ content: attachment.pdf, fileName: attachment.fileName }]
+    : undefined;
+
+  try {
+    await sendNipaMailEmail(
+      email,
+      "Approval Request Letter - 25th ACCP 2026",
+      plainText,
+      attachments,
+    );
+    console.log(`Approval request email sent to ${email}${attachment ? " (with PDF)" : ""}`);
+  } catch (error) {
+    console.error("Error sending approval request email:", error);
+    throw error;
+  }
+}
+
+// ============================================
+// LETTER OF ACCEPTANCE FOR ACADEMIC PAPER (manual send only)
+// Sent to abstract authors with the type-specific acceptance letter PDF.
+// ============================================
+
+/**
+ * Format the presentation type with the correct English indefinite article.
+ * "oral"   → "an Oral"
+ * "poster" → "a Poster"
+ */
+function formatPresentationTypeWithArticle(presentationType: string): string {
+  const t = (presentationType ?? "").trim();
+  if (!t) return "a Poster/Oral";
+  const titled = t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+  const article = /^[aeiou]/i.test(titled) ? "an" : "a";
+  return `${article} ${titled}`;
+}
+
+const ACADEMIC_ACCEPTANCE_PLAIN_TEXT = (recipientName: string, presentationType: string) => `Dear ${recipientName},
+
+Letter of Acceptance for Academic Paper
+
+The Subcommittee has successfully processed your academic submission through the peer-review process. The Organizing Committee is pleased to inform you that your work has been accepted for ${formatPresentationTypeWithArticle(presentationType)} presentation. Please find further details in the attached document.
+
+To complete your registration and secure your right to present, we kindly request that you register and submit your payment via the website at https://accp2026bangkok.pharmacycouncil.org by May 31, 2026.
+
+Please note that the Poster Template will be announced in due course.
+
+Sincerely,
+25th ACCP committee
+Bangkok Thailand`;
+
+export function buildAcademicAcceptanceEmailContent(
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  presentationType: string,
+): { subject: string; html: string } {
+  const plainText = ACADEMIC_ACCEPTANCE_PLAIN_TEXT(
+    getFullName(firstName, middleName, lastName),
+    presentationType,
+  );
+  return {
+    subject: "Letter of Acceptance for Academic Paper - 25th ACCP 2026",
+    html: buildEmailHtmlFromText(plainText),
+  };
+}
+
+export async function sendAcademicAcceptanceEmail(
+  email: string,
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  presentationType: string,
+  attachment?: { pdf: Buffer; fileName: string },
+): Promise<void> {
+  const plainText = ACADEMIC_ACCEPTANCE_PLAIN_TEXT(
+    getFullName(firstName, middleName, lastName),
+    presentationType,
+  );
+  const attachments: EmailAttachment[] | undefined = attachment
+    ? [{ content: attachment.pdf, fileName: attachment.fileName }]
+    : undefined;
+
+  try {
+    await sendNipaMailEmail(
+      email,
+      "Letter of Acceptance for Academic Paper - 25th ACCP 2026",
+      plainText,
+      attachments,
+    );
+    console.log(`Academic acceptance email sent to ${email}${attachment ? " (with PDF)" : ""}`);
+  } catch (error) {
+    console.error("Error sending academic acceptance email:", error);
+    throw error;
+  }
 }
 
 /**
