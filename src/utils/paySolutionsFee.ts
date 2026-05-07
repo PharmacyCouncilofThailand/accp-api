@@ -2,15 +2,17 @@
  * Pay Solutions fee utility
  *
  * Rounding model (from calculator sample):
- * 1) fee = round(gross * rate, 2)
+ * 1) fee = max(round(gross * rate, 2), minFee)
  * 2) vat = round(fee * 0.07, 2)
  * 3) net = gross - fee - vat
+ *
+ * PromptPay minimum fee: if gross × 1.35% < 5 THB, fee = 5 THB (then vat on 5)
  */
 
 const FEE_CONFIG = {
-  promptpay: { rate: 0.01, vat: 0.07 },
-  card: { rate: 0.028, vat: 0.07 },
-  usd_card: { rate: 0.03, vat: 0.07 },
+  promptpay: { rate: 0.0135, vat: 0.07, minFee: 5 },
+  card: { rate: 0.028, vat: 0.07, minFee: 0 },
+  usd_card: { rate: 0.03, vat: 0.07, minFee: 0 },
 } as const;
 
 export type PaySolutionsFeeMethod = keyof typeof FEE_CONFIG;
@@ -38,7 +40,8 @@ function toSatang(value: number): number {
 function calculateNetFromGross(grossSatang: number, method: PaySolutionsFeeMethod) {
   const cfg = FEE_CONFIG[method];
   const gross = grossSatang / 100;
-  const processingFee = round2(gross * cfg.rate);
+  const rawFee = round2(gross * cfg.rate);
+  const processingFee = cfg.minFee > 0 ? Math.max(rawFee, cfg.minFee) : rawFee;
   const processingVat = round2(processingFee * cfg.vat);
   const net = round2(gross - processingFee - processingVat);
   const totalFee = round2(processingFee + processingVat);
