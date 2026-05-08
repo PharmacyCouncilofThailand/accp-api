@@ -557,6 +557,7 @@ export const abstracts = pgTable("abstracts", {
   fullPaperUrl: varchar("full_paper_url", { length: 500 }),
   status: abstractStatusEnum("status").notNull().default("pending"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 export const abstractCoAuthors = pgTable("abstract_co_authors", {
