@@ -1,6 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { db } from "../../../database/index.js";
-import { abstracts, abstractCoAuthors } from "../../../database/schema.js";
+import { abstracts, abstractCoAuthors, users } from "../../../database/schema.js";
 import { eq, desc } from "drizzle-orm";
 
 export default async function (fastify: FastifyInstance) {
@@ -25,8 +25,25 @@ export default async function (fastify: FastifyInstance) {
                     conclusion: abstracts.conclusion,
                     fullPaperUrl: abstracts.fullPaperUrl,
                     createdAt: abstracts.createdAt,
+                    firstName: users.firstName,
+                    middleName: users.middleName,
+                    lastName: users.lastName,
+                    email: users.email,
+                    phone: users.phone,
+                    country: users.country,
+                    institution: users.institution,
+                    author: {
+                        firstName: users.firstName,
+                        middleName: users.middleName,
+                        lastName: users.lastName,
+                        email: users.email,
+                        phone: users.phone,
+                        country: users.country,
+                        institution: users.institution,
+                    },
                 })
                 .from(abstracts)
+                .leftJoin(users, eq(abstracts.userId, users.id))
                 .where(eq(abstracts.userId, userId))
                 .orderBy(desc(abstracts.createdAt));
 
