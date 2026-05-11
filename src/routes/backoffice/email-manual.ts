@@ -12,7 +12,7 @@ import {
   events,
   abstracts,
 } from "../../database/schema.js";
-import { eq, and, ilike, or, inArray } from "drizzle-orm";
+import { eq, and, ilike, or, inArray, desc } from "drizzle-orm";
 import {
   sendSignupNotificationEmail,
   sendPendingApprovalEmail,
@@ -446,6 +446,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
             ilike(users.email, `%${search}%`),
             ilike(users.firstName, `%${search}%`),
           ) : undefined))
+          .orderBy(desc(abstracts.updatedAt))
           .limit(MAX);
 
         recipients = rows.map((a) => ({
