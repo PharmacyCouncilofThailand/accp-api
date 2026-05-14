@@ -22,6 +22,16 @@ function uniquePositiveIds(ids: number[] = [], excludeId?: number): number[] {
     return [...new Set(ids)].filter((id) => Number.isInteger(id) && id > 0 && id !== excludeId);
 }
 
+function buildTicketSessionSelectionMap(
+    selections: { ticketTypeId: number; sessionIds: number[] }[] = [],
+): Map<number, number[]> {
+    const map = new Map<number, number[]>();
+    for (const selection of selections) {
+        map.set(selection.ticketTypeId, uniquePositiveIds(selection.sessionIds));
+    }
+    return map;
+}
+
 async function validateEventSessionIds(tx: any, eventId: number, sessionIds: number[]): Promise<number[]> {
     const uniqueIds = uniquePositiveIds(sessionIds);
     if (uniqueIds.length === 0) return [];
@@ -41,7 +51,7 @@ async function validateEventSessionIds(tx: any, eventId: number, sessionIds: num
     return uniqueIds;
 }
 
-async function getAutoSessionIdsForTicket(tx: any, eventId: number, ticketTypeId: number): Promise<number[]> {
+async function getLinkedSessionIdsForTicket(tx: any, eventId: number, ticketTypeId: number): Promise<number[]> {
     const linkedSessions = await tx
         .select({ sessionId: ticketSessions.sessionId })
         .from(ticketSessions)
@@ -51,9 +61,12 @@ async function getAutoSessionIdsForTicket(tx: any, eventId: number, ticketTypeId
             eq(sessions.eventId, eventId),
         ));
 
-    if (linkedSessions.length > 0) {
-        return linkedSessions.map((ls: { sessionId: number }) => ls.sessionId);
-    }
+    return linkedSessions.map((ls: { sessionId: number }) => ls.sessionId);
+}
+
+async function getAutoSessionIdsForTicket(tx: any, eventId: number, ticketTypeId: number): Promise<number[]> {
+    const linkedSessionIds = await getLinkedSessionIdsForTicket(tx, eventId, ticketTypeId);
+    if (linkedSessionIds.length > 0) return linkedSessionIds;
 
     const mainSessions = await tx
         .select({ id: sessions.id })
@@ -63,12 +76,46 @@ async function getAutoSessionIdsForTicket(tx: any, eventId: number, ticketTypeId
     return mainSessions.map((s: { id: number }) => s.id);
 }
 
+async function validateTicketSessionSelection(
+    tx: any,
+    eventId: number,
+    ticketTypeId: number,
+    selectedSessionIds: number[],
+    allowMainSessionFallback = false,
+): Promise<number[]> {
+    const selectedIds = uniquePositiveIds(selectedSessionIds);
+    if (selectedIds.length === 0) return [];
+
+    let linkedSessionIds = await getLinkedSessionIdsForTicket(tx, eventId, ticketTypeId);
+    if (linkedSessionIds.length === 0 && allowMainSessionFallback) {
+        linkedSessionIds = await getAutoSessionIdsForTicket(tx, eventId, ticketTypeId);
+    }
+
+    const linkedSet = new Set(linkedSessionIds);
+    if (selectedIds.some((sessionId) => !linkedSet.has(sessionId))) {
+        throw new Error("SESSION_NOT_LINKED_TO_TICKET");
+    }
+
+    return selectedIds;
+}
+
 async function resolvePrimarySessionIds(
     tx: any,
     eventId: number,
     ticketTypeId: number,
     explicitSessionIds: number[] = [],
+    selectionMap = new Map<number, number[]>(),
 ): Promise<number[]> {
+    if (selectionMap.has(ticketTypeId)) {
+        return validateTicketSessionSelection(
+            tx,
+            eventId,
+            ticketTypeId,
+            selectionMap.get(ticketTypeId) || [],
+            true,
+        );
+    }
+
     if (explicitSessionIds.length > 0) {
         return validateEventSessionIds(tx, eventId, explicitSessionIds);
     }
@@ -79,14 +126,17 @@ async function resolvePrimarySessionIds(
 async function getAddonSessionLinks(
     tx: any,
     eventId: number,
-    addonTicketTypeIds: number[],
+    addonTickets: { id: number; groupName: string | null }[],
+    selectionMap = new Map<number, number[]>(),
 ): Promise<{ ticketTypeId: number; sessionId: number }[]> {
+    const addonTicketTypeIds = addonTickets.map((ticket) => ticket.id);
     if (addonTicketTypeIds.length === 0) return [];
 
     const rows = await tx
         .select({
             ticketTypeId: ticketSessions.ticketTypeId,
             sessionId: ticketSessions.sessionId,
+            sessionType: sessions.sessionType,
         })
         .from(ticketSessions)
         .innerJoin(sessions, eq(ticketSessions.sessionId, sessions.id))
@@ -101,7 +151,36 @@ async function getAddonSessionLinks(
         throw new Error("ADDON_TICKET_HAS_NO_SESSIONS");
     }
 
-    return rows;
+    const links: { ticketTypeId: number; sessionId: number }[] = [];
+    for (const addon of addonTickets) {
+        const linkedRows = rows.filter((row: { ticketTypeId: number }) => row.ticketTypeId === addon.id);
+        const linkedSessionIds = linkedRows.map((row: { sessionId: number }) => row.sessionId);
+        const hasExplicitSelection = selectionMap.has(addon.id);
+        const selectedSessionIds = hasExplicitSelection
+            ? uniquePositiveIds(selectionMap.get(addon.id) || [])
+            : linkedSessionIds;
+
+        if (selectedSessionIds.length === 0) {
+            throw new Error("ADDON_TICKET_REQUIRES_SESSION");
+        }
+
+        const linkedSet = new Set(linkedSessionIds);
+        if (selectedSessionIds.some((sessionId: number) => !linkedSet.has(sessionId))) {
+            throw new Error("SESSION_NOT_LINKED_TO_TICKET");
+        }
+
+        const isWorkshop = (addon.groupName || "").toLowerCase() === "workshop" ||
+            linkedRows.some((row: { sessionType: string | null }) => row.sessionType === "workshop");
+        if (isWorkshop && selectedSessionIds.length !== 1) {
+            throw new Error("WORKSHOP_REQUIRES_ONE_SESSION");
+        }
+
+        for (const sessionId of selectedSessionIds) {
+            links.push({ ticketTypeId: addon.id, sessionId });
+        }
+    }
+
+    return links;
 }
 
 async function getRelatedAddonTicketIds(tx: any, addonTicketTypeIds: number[]): Promise<number[]> {
@@ -362,11 +441,12 @@ export default async function (fastify: FastifyInstance) {
             return reply.status(400).send({ error: "Invalid input", details: result.error.flatten() });
         }
 
-        const { userId, eventId, ticketTypeId, addonTicketTypeIds, sessionIds, note } = result.data;
+        const { userId, eventId, ticketTypeId, addonTicketTypeIds, ticketSessionSelections, sessionIds, note } = result.data;
 
         try {
             const registration = await db.transaction(async (tx) => {
                 const selectedAddonTicketIds = uniquePositiveIds(addonTicketTypeIds, ticketTypeId);
+                const selectionMap = buildTicketSessionSelectionMap(ticketSessionSelections);
 
                 // 1. Validate user exists
                 const [user] = await tx
@@ -402,7 +482,7 @@ export default async function (fastify: FastifyInstance) {
 
                 const addonTickets = selectedAddonTicketIds.length > 0
                     ? await tx
-                        .select({ id: ticketTypes.id, name: ticketTypes.name, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
+                        .select({ id: ticketTypes.id, name: ticketTypes.name, groupName: ticketTypes.groupName, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
                         .from(ticketTypes)
                         .where(and(
                             inArray(ticketTypes.id, selectedAddonTicketIds),
@@ -469,9 +549,9 @@ export default async function (fastify: FastifyInstance) {
                 }).returning();
 
                 // 7. Determine sessions to link. Add-ons always use their own ticket type.
-                const addonSessionLinks = await getAddonSessionLinks(tx, eventId, selectedAddonTicketIds);
+                const addonSessionLinks = await getAddonSessionLinks(tx, eventId, addonTickets, selectionMap);
                 const addonSessionIds = new Set(addonSessionLinks.map(link => link.sessionId));
-                const sessionsToLink = (await resolvePrimarySessionIds(tx, eventId, ticketTypeId, sessionIds || []))
+                const sessionsToLink = (await resolvePrimarySessionIds(tx, eventId, ticketTypeId, sessionIds || [], selectionMap))
                     .filter((sid) => !addonSessionIds.has(sid));
 
                 // 8. Insert registration_sessions
@@ -585,7 +665,10 @@ export default async function (fastify: FastifyInstance) {
                 ADDON_TICKET_NOT_FOUND: { status: 404, message: "Add-on ticket not found or does not belong to event" },
                 ADDON_TICKET_SOLD_OUT: { status: 409, message: "One of the selected add-ons is sold out" },
                 ADDON_TICKET_HAS_NO_SESSIONS: { status: 400, message: "One of the selected add-ons has no linked sessions" },
+                ADDON_TICKET_REQUIRES_SESSION: { status: 400, message: "Please select at least one session for each selected add-on" },
+                WORKSHOP_REQUIRES_ONE_SESSION: { status: 400, message: "Workshop add-ons require exactly one selected session" },
                 SESSION_NOT_FOUND: { status: 400, message: "Some selected sessions do not belong to this event" },
+                SESSION_NOT_LINKED_TO_TICKET: { status: 400, message: "Some selected sessions are not linked to the selected ticket type" },
             };
 
             const known = knownErrors[error?.message];
@@ -943,11 +1026,12 @@ export default async function (fastify: FastifyInstance) {
             return reply.status(400).send({ error: "Invalid input", details: result.error.flatten() });
         }
 
-        const { userIds, eventId, ticketTypeId, addonTicketTypeIds, sessionIds, note } = result.data;
+        const { userIds, eventId, ticketTypeId, addonTicketTypeIds, ticketSessionSelections, sessionIds, note } = result.data;
 
         try {
             const results = await db.transaction(async (tx) => {
                 const selectedAddonTicketIds = uniquePositiveIds(addonTicketTypeIds, ticketTypeId);
+                const selectionMap = buildTicketSessionSelectionMap(ticketSessionSelections);
 
                 // 1. Validate event exists
                 const [event] = await tx
@@ -975,7 +1059,7 @@ export default async function (fastify: FastifyInstance) {
 
                 const addonTickets = selectedAddonTicketIds.length > 0
                     ? await tx
-                        .select({ id: ticketTypes.id, name: ticketTypes.name, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
+                        .select({ id: ticketTypes.id, name: ticketTypes.name, groupName: ticketTypes.groupName, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
                         .from(ticketTypes)
                         .where(and(
                             inArray(ticketTypes.id, selectedAddonTicketIds),
@@ -1075,9 +1159,9 @@ export default async function (fastify: FastifyInstance) {
                 }
 
                 // 5. Determine sessions to link
-                const addonSessionLinks = await getAddonSessionLinks(tx, eventId, selectedAddonTicketIds);
+                const addonSessionLinks = await getAddonSessionLinks(tx, eventId, addonTickets, selectionMap);
                 const addonSessionIds = new Set(addonSessionLinks.map(link => link.sessionId));
-                const sessionsToLink = (await resolvePrimarySessionIds(tx, eventId, ticketTypeId, sessionIds || []))
+                const sessionsToLink = (await resolvePrimarySessionIds(tx, eventId, ticketTypeId, sessionIds || [], selectionMap))
                     .filter((sid) => !addonSessionIds.has(sid));
 
                 // 6. Process each user
@@ -1270,7 +1354,10 @@ export default async function (fastify: FastifyInstance) {
                 TICKET_NOT_FOUND: { status: 404, message: "Ticket type not found or does not belong to event" },
                 ADDON_TICKET_NOT_FOUND: { status: 404, message: "Add-on ticket not found or does not belong to event" },
                 ADDON_TICKET_HAS_NO_SESSIONS: { status: 400, message: "One of the selected add-ons has no linked sessions" },
+                ADDON_TICKET_REQUIRES_SESSION: { status: 400, message: "Please select at least one session for each selected add-on" },
+                WORKSHOP_REQUIRES_ONE_SESSION: { status: 400, message: "Workshop add-ons require exactly one selected session" },
                 SESSION_NOT_FOUND: { status: 400, message: "Some selected sessions do not belong to this event" },
+                SESSION_NOT_LINKED_TO_TICKET: { status: 400, message: "Some selected sessions are not linked to the selected ticket type" },
             };
 
             const known = knownErrors[error?.message];
