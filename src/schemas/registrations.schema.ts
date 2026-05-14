@@ -31,11 +31,17 @@ export const updateRegistrationSchema = z.object({
     dietaryRequirements: z.string().optional(),
 });
 
+const ticketSessionSelectionSchema = z.object({
+    ticketTypeId: z.number().min(1, "Ticket type is required"),
+    sessionIds: z.array(z.number()).default([]),
+});
+
 export const manualRegistrationSchema = z.object({
     userId: z.number().min(1, "User is required"),
     eventId: z.number().min(1, "Event is required"),
     ticketTypeId: z.number().min(1, "Ticket type is required"),
     addonTicketTypeIds: z.array(z.number()).optional().default([]),
+    ticketSessionSelections: z.array(ticketSessionSelectionSchema).optional().default([]),
     sessionIds: z.array(z.number()).optional().default([]),
     note: z.string().max(500).optional(),
 });
@@ -51,6 +57,7 @@ export const batchManualRegistrationSchema = z.object({
     eventId: z.number().min(1, "Event is required"),
     ticketTypeId: z.number().min(1, "Ticket type is required"),
     addonTicketTypeIds: z.array(z.number()).optional().default([]),
+    ticketSessionSelections: z.array(ticketSessionSelectionSchema).optional().default([]),
     sessionIds: z.array(z.number()).optional().default([]),
     note: z.string().max(500).optional(),
 });
