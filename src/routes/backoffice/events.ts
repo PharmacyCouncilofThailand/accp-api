@@ -234,6 +234,29 @@ export default async function (fastify: FastifyInstance) {
         .from(ticketTypes)
         .where(eq(ticketTypes.eventId, parseInt(id)));
 
+      const ticketIds = eventTickets.map((ticket) => ticket.id);
+      const ticketSessionLinks =
+        ticketIds.length > 0
+          ? await db
+            .select()
+            .from(ticketSessions)
+            .where(inArray(ticketSessions.ticketTypeId, ticketIds))
+          : [];
+
+      const sessionIdsByTicket = ticketSessionLinks.reduce<Record<number, number[]>>(
+        (acc, link) => {
+          if (!acc[link.ticketTypeId]) acc[link.ticketTypeId] = [];
+          acc[link.ticketTypeId].push(link.sessionId);
+          return acc;
+        },
+        {},
+      );
+
+      const ticketsWithSessions = eventTickets.map((ticket) => ({
+        ...ticket,
+        sessionIds: sessionIdsByTicket[ticket.id] || [],
+      }));
+
       // Get venue images
       const venueImages = await db
         .select()
@@ -244,7 +267,7 @@ export default async function (fastify: FastifyInstance) {
       return reply.send({
         event,
         sessions: sessionsWithSpeakers,
-        tickets: eventTickets,
+        tickets: ticketsWithSessions,
         venueImages,
       });
     } catch (error) {

@@ -35,6 +35,7 @@ export const manualRegistrationSchema = z.object({
     userId: z.number().min(1, "User is required"),
     eventId: z.number().min(1, "Event is required"),
     ticketTypeId: z.number().min(1, "Ticket type is required"),
+    addonTicketTypeIds: z.array(z.number()).optional().default([]),
     sessionIds: z.array(z.number()).optional().default([]),
     note: z.string().max(500).optional(),
 });
@@ -49,6 +50,7 @@ export const batchManualRegistrationSchema = z.object({
     userIds: z.array(z.number()).min(1, "At least one user required").max(50, "Maximum 50 users per batch"),
     eventId: z.number().min(1, "Event is required"),
     ticketTypeId: z.number().min(1, "Ticket type is required"),
+    addonTicketTypeIds: z.array(z.number()).optional().default([]),
     sessionIds: z.array(z.number()).optional().default([]),
     note: z.string().max(500).optional(),
 });
