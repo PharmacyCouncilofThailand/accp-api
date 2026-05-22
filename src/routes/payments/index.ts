@@ -438,6 +438,18 @@ interface PurchaseSnapshot {
   purchasedAddOns: string[];
 }
 
+function normalizeAddonGroupNames(
+  rows: Array<{ groupName: string | null }>
+): string[] {
+  return [
+    ...new Set(
+      rows
+        .map((row) => row.groupName?.trim().toLowerCase())
+        .filter((groupName): groupName is string => Boolean(groupName))
+    ),
+  ];
+}
+
 function parsePositiveEventId(value: unknown): number | null {
   const parsed = typeof value === "number" ? value : parseInt(String(value ?? ""), 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
@@ -464,20 +476,42 @@ async function getPaidPurchaseSnapshot(userId: number, eventId?: number): Promis
   }
 
   const [registration] = await db
-    .select({ regCode: registrations.regCode })
+    .select({
+      regCode: registrations.regCode,
+      ticketName: ticketTypes.name,
+    })
     .from(registrations)
+    .innerJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
     .where(and(...registrationConditions))
     .orderBy(desc(registrations.id))
     .limit(1);
+
+  const registrationAddonConditions = [
+    eq(registrations.userId, userId),
+    eq(registrations.status, "confirmed"),
+    eq(ticketTypes.category, "addon"),
+  ];
+  if (typeof eventId === "number") {
+    registrationAddonConditions.push(eq(registrations.eventId, eventId));
+  }
+
+  const registrationAddonRows = await db
+    .select({ groupName: ticketTypes.groupName })
+    .from(registrationSessions)
+    .innerJoin(registrations, eq(registrationSessions.registrationId, registrations.id))
+    .innerJoin(ticketTypes, eq(registrationSessions.ticketTypeId, ticketTypes.id))
+    .where(and(...registrationAddonConditions));
+
+  const registeredAddOns = normalizeAddonGroupNames(registrationAddonRows);
 
   if (paidOrders.length === 0) {
     // No paid orders — but if a confirmed registration exists (e.g. manual/backoffice),
     // treat as having a primary ticket so the user can buy add-ons
     return {
       hasPrimaryTicket: !!registration,
-      primaryTicketName: null,
+      primaryTicketName: registration?.ticketName || null,
       regCode: registration?.regCode || null,
-      purchasedAddOns: [],
+      purchasedAddOns: registeredAddOns,
     };
   }
 
@@ -496,11 +530,12 @@ async function getPaidPurchaseSnapshot(userId: number, eventId?: number): Promis
   const primaryItem = allItems.find((item) => item.category === "primary");
 
   const purchasedAddOns = [
-    ...new Set(
-      allItems
-        .filter((item) => item.category === "addon" && item.groupName)
-        .map((item) => item.groupName!.toLowerCase())
-    ),
+    ...new Set([
+      ...normalizeAddonGroupNames(
+        allItems.filter((item) => item.category === "addon")
+      ),
+      ...registeredAddOns,
+    ]),
   ];
 
   const regCode = registration?.regCode || null;
@@ -513,7 +548,7 @@ async function getPaidPurchaseSnapshot(userId: number, eventId?: number): Promis
 
   return {
     hasPrimaryTicket,
-    primaryTicketName: primaryItem?.ticketName || null,
+    primaryTicketName: primaryItem?.ticketName || registration?.ticketName || null,
     regCode,
     purchasedAddOns,
   };
