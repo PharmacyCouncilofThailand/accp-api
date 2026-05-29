@@ -597,9 +597,9 @@ export default async function (fastify: FastifyInstance) {
         return [updated];
       });
 
-      // Determine locale for the resubmit link in the email
-      // Thai students get /th/, International students get /en/
-      const targetLocale: "th" | "en" = targetRole === "thstd" ? "th" : "en";
+      // Always use the site's default locale (/en) for the resubmit link.
+      // The website itself lets users switch language after landing.
+      const targetLocale: "th" | "en" = "en";
 
       // Friendly role labels for the email body
       const roleLabelMap: Record<string, string> = {
