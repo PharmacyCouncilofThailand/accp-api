@@ -109,14 +109,27 @@ export interface AbstractAcceptData {
   abstractTitle: string;
 }
 
-/** Render the abstract-accepted letter .docx (works for both Oral and Poster). */
+/**
+ * Render the abstract-accepted letter .docx.
+ *
+ * The Oral and Poster letters use separate underlying templates because the
+ * organising committee provides two distinct source documents whose body
+ * copy differs (e.g. "in the format of a Oral" vs "in the format of a
+ * poster", and minor wording around the presentation type). The template
+ * is selected from `data.presentationType` ("oral" | "poster"; matched
+ * case-insensitively, falling back to the Oral template).
+ */
 export async function renderAbstractAcceptDocx(
   data: AbstractAcceptData
 ): Promise<Buffer> {
-  return renderDocxTemplate("accp-abstract-accept-template.docx", {
+  const type = (data.presentationType ?? "").trim().toLowerCase();
+  const templateFile =
+    type === "poster"
+      ? "accp-abstract-accept-poster-template.docx"
+      : "accp-abstract-accept-oral-template.docx";
+  return renderDocxTemplate(templateFile, {
     participantName: data.participantName,
     acceptDate: data.acceptDate,
-    presentationType: data.presentationType,
     abstractTitle: data.abstractTitle,
   });
 }
