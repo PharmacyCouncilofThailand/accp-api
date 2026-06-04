@@ -771,15 +771,32 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
                 continue;
               }
 
-              // Render the invitation letter PDF inline. Failure must NOT block —
-              // fall back to sending without attachment.
+              // Try to render the invitation letter PDF before sending.
               let attachment: { pdf: Buffer; fileName: string } | undefined;
-              try {
-                attachment = (await buildInvitationLetterPdfForOrder(id)) ?? undefined;
-              } catch (pdfErr) {
-                fastify.log.warn(
-                  { err: pdfErr },
-                  `email-manual: failed to render invitation letter PDF for order ${id}; sending without attachment`,
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                fastify.log.info(
+                  `email-manual: generating invitation letter PDF for order ${id} - attempt ${attempt}/3`,
+                );
+                try {
+                  const renderedAttachment = await buildInvitationLetterPdfForOrder(id);
+                  if (!renderedAttachment) {
+                    throw new Error(`Invitation letter builder returned no PDF for order ${id}`);
+                  }
+                  attachment = renderedAttachment;
+                  fastify.log.info(
+                    `email-manual: invitation letter PDF generated for order ${id}: ${attachment.fileName} (${attachment.pdf.length} bytes) on attempt ${attempt}/3`,
+                  );
+                  break;
+                } catch (pdfErr) {
+                  fastify.log.error(
+                    { err: pdfErr },
+                    `email-manual: failed to render invitation letter PDF for order ${id} on attempt ${attempt}/3`,
+                  );
+                }
+              }
+              if (!attachment) {
+                fastify.log.error(
+                  `email-manual: invitation letter PDF could not be generated for order ${id} after 3 attempts; sending email without attachment`,
                 );
               }
               await sendApprovalRequestEmail(
@@ -871,28 +888,42 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
                 results.push({ id, email: author.email, name: fullName, type: template, status: "skipped", reason: `Abstract status is "${ab.status}" (must be accepted)` });
                 continue;
               }
-              // Render the type-specific acceptance letter PDF. Failure must NOT
-              // block sending the email — fall back to no attachment.
+              // Try to render the type-specific acceptance letter PDF before sending.
               let attachment: { pdf: Buffer; fileName: string } | undefined;
-              try {
-                const pdf = await renderAbstractAcceptPdf({
-                  participantName: buildParticipantName({
-                    firstName: author.firstName,
-                    middleName: author.middleName,
-                    lastName: author.lastName,
-                  }),
-                  acceptDate: formatIssueDate(ab.updatedAt ?? new Date()),
-                  presentationType: titleCasePresentationType(ab.presentationType),
-                  abstractTitle: ab.title,
-                });
-                attachment = {
-                  pdf,
-                  fileName: `ACCP2026-Accept-${ab.trackingId || ab.id}.pdf`,
-                };
-              } catch (pdfErr) {
-                fastify.log.warn(
-                  { err: pdfErr },
-                  `email-manual: failed to render acceptance letter PDF for abstract ${id}; sending without attachment`,
+              const fileName = `ACCP2026-Accept-${ab.trackingId || ab.id}.pdf`;
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                fastify.log.info(
+                  `email-manual: generating acceptance letter PDF for abstract ${id} (${ab.trackingId || "no-tracking-id"}): ${fileName} - attempt ${attempt}/3`,
+                );
+                try {
+                  const pdf = await renderAbstractAcceptPdf({
+                    participantName: buildParticipantName({
+                      firstName: author.firstName,
+                      middleName: author.middleName,
+                      lastName: author.lastName,
+                    }),
+                    acceptDate: formatIssueDate(ab.updatedAt ?? new Date()),
+                    presentationType: titleCasePresentationType(ab.presentationType),
+                    abstractTitle: ab.title,
+                  });
+                  attachment = {
+                    pdf,
+                    fileName,
+                  };
+                  fastify.log.info(
+                    `email-manual: acceptance letter PDF generated for abstract ${id} (${ab.trackingId || "no-tracking-id"}): ${fileName} (${pdf.length} bytes) on attempt ${attempt}/3`,
+                  );
+                  break;
+                } catch (pdfErr) {
+                  fastify.log.error(
+                    { err: pdfErr },
+                    `email-manual: failed to render acceptance letter PDF for abstract ${id} on attempt ${attempt}/3`,
+                  );
+                }
+              }
+              if (!attachment) {
+                fastify.log.error(
+                  `email-manual: acceptance letter PDF could not be generated for abstract ${id} after 3 attempts; sending email without attachment`,
                 );
               }
               await sendAcademicAcceptanceEmail(
