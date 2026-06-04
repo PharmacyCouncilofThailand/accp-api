@@ -16,6 +16,12 @@ import {
   sendAbstractAcceptedOralEmail,
   sendAbstractRejectedEmail,
 } from "../../services/emailService.js";
+import {
+  buildParticipantName,
+  formatIssueDate,
+  renderAbstractAcceptPdf,
+  titleCasePresentationType,
+} from "../../services/letter.service.js";
 
 export default async function (fastify: FastifyInstance) {
   // List Abstracts
@@ -306,6 +312,48 @@ export default async function (fastify: FastifyInstance) {
       if (author) {
         try {
           if (status === "accepted") {
+            let acceptanceAttachment: { pdf: Buffer; fileName: string } | undefined;
+            const presentationType = titleCasePresentationType(
+              updatedAbstract.presentationType,
+            );
+            const fileName = `ACCP2026-Accept-${updatedAbstract.trackingId || updatedAbstract.id}.pdf`;
+            for (let attempt = 1; attempt <= 3; attempt++) {
+              fastify.log.info(
+                `Generating abstract acceptance letter PDF for abstract ${id} (${updatedAbstract.trackingId || "no-tracking-id"}): ${fileName} - attempt ${attempt}/3`,
+              );
+              try {
+                const pdf = await renderAbstractAcceptPdf({
+                  participantName: buildParticipantName({
+                    firstName: author.firstName,
+                    middleName: author.middleName,
+                    lastName: author.lastName,
+                  }),
+                  acceptDate: formatIssueDate(updatedAbstract.updatedAt || new Date()),
+                  presentationType,
+                  abstractTitle: updatedAbstract.title,
+                });
+                acceptanceAttachment = {
+                  pdf,
+                  fileName,
+                };
+                fastify.log.info(
+                  `Abstract acceptance letter PDF generated for abstract ${id} (${updatedAbstract.trackingId || "no-tracking-id"}): ${fileName} (${pdf.length} bytes) on attempt ${attempt}/3`,
+                );
+                break;
+              } catch (letterError) {
+                fastify.log.error(
+                  { err: letterError },
+                  `Failed to render abstract acceptance letter PDF for abstract ${id} (${updatedAbstract.trackingId || "no-tracking-id"}) on attempt ${attempt}/3`,
+                );
+              }
+            }
+
+            if (!acceptanceAttachment) {
+              fastify.log.error(
+                `Abstract acceptance letter PDF could not be generated for abstract ${id} (${updatedAbstract.trackingId || "no-tracking-id"}) after 3 attempts; sending abstract accepted email without attachment`,
+              );
+            }
+
             // Check presentationType to determine poster or oral email
             if (updatedAbstract.presentationType === "poster") {
               await sendAbstractAcceptedPosterEmail(
@@ -315,6 +363,7 @@ export default async function (fastify: FastifyInstance) {
                 author.lastName,
                 updatedAbstract.title,
                 comment,
+                acceptanceAttachment,
               );
               fastify.log.info(
                 `Abstract accepted (poster) email sent to ${author.email}`,
@@ -327,6 +376,7 @@ export default async function (fastify: FastifyInstance) {
                 author.lastName,
                 updatedAbstract.title,
                 comment,
+                acceptanceAttachment,
               );
               fastify.log.info(
                 `Abstract accepted (oral) email sent to ${author.email}`,

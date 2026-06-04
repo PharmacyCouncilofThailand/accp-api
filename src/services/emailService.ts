@@ -1,5 +1,6 @@
 import axios from "axios";
 import { getFullName } from "../utils/name.js";
+import { formatIssueDate, renderLetterPdf } from "./letter.service.js";
 
 // ============================================
 // NipaMail Configuration
@@ -164,9 +165,11 @@ async function sendNipaMailHtml(
   recipient: string,
   subject: string,
   html: string,
+  attachments?: EmailAttachment[],
   retryOnAuth: boolean = true
 ): Promise<void> {
   const token = await getAccessToken();
+  const nipaAttachments = toNipaAttachments(attachments);
 
   try {
     await axios.post(
@@ -178,6 +181,7 @@ async function sendNipaMailHtml(
           recipient: recipient,
           subject: subject,
           html: encodeToBase64(html),
+          ...(nipaAttachments ? { attachments: nipaAttachments } : {}),
         },
       },
       {
@@ -194,7 +198,7 @@ async function sendNipaMailHtml(
       error.response?.status === 401
     ) {
       cachedToken = null;
-      return sendNipaMailHtml(recipient, subject, html, false);
+      return sendNipaMailHtml(recipient, subject, html, attachments, false);
     }
 
     if (axios.isAxiosError(error) && error.response) {
@@ -387,7 +391,8 @@ export async function sendAbstractAcceptedPosterEmail(
   middleName: string | null,
   lastName: string,
   abstractTitle: string,
-  comment?: string
+  comment?: string,
+  attachment?: { pdf: Buffer; fileName: string },
 ): Promise<void> {
   const websiteUrl = getWebsiteUrl();
   const contactEmail = getContactEmail();
@@ -411,7 +416,8 @@ Bangkok Thailand
     await sendNipaMailEmail(
       email,
       "Congratulations! Abstract Accepted (Poster) - 25th ACCP 2026",
-      plainText
+      plainText,
+      attachment ? [{ content: attachment.pdf, fileName: attachment.fileName }] : undefined,
     );
     console.log(`Abstract accepted (poster) email sent to ${email}`);
   } catch (error) {
@@ -430,7 +436,8 @@ export async function sendAbstractAcceptedOralEmail(
   middleName: string | null,
   lastName: string,
   abstractTitle: string,
-  comment?: string
+  comment?: string,
+  attachment?: { pdf: Buffer; fileName: string },
 ): Promise<void> {
   const websiteUrl = getWebsiteUrl();
   const contactEmail = getContactEmail();
@@ -454,7 +461,8 @@ Bangkok Thailand
     await sendNipaMailEmail(
       email,
       "Congratulations! Abstract Accepted (Oral) - 25th ACCP 2026",
-      plainText
+      plainText,
+      attachment ? [{ content: attachment.pdf, fileName: attachment.fileName }] : undefined,
     );
     console.log(`Abstract accepted (oral) email sent to ${email}`);
   } catch (error) {
@@ -937,11 +945,47 @@ Bangkok Thailand
     );
   }
 
+  const attachmentFileName = `ACCP2026-Approval-Request-${orderNumber}.pdf`;
+  let attachments: EmailAttachment[] | undefined;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    console.log(
+      `Generating approval request letter PDF for order ${orderNumber} (${attachmentFileName}) - attempt ${attempt}/3`,
+    );
+    try {
+      const letterPdf = await renderLetterPdf({
+        participantName: getFullName(firstName, middleName, lastName),
+        issueDate: formatIssueDate(paidAt),
+      });
+      attachments = [
+        {
+          content: letterPdf,
+          fileName: attachmentFileName,
+        },
+      ];
+      console.log(
+        `Approval request letter PDF generated for order ${orderNumber}: ${attachmentFileName} (${letterPdf.length} bytes) on attempt ${attempt}/3`,
+      );
+      break;
+    } catch (letterError) {
+      console.error(
+        `Failed to render approval request letter PDF for order ${orderNumber} on attempt ${attempt}/3:`,
+        letterError,
+      );
+    }
+  }
+
+  if (!attachments) {
+    console.error(
+      `Approval request letter PDF could not be generated for order ${orderNumber} after 3 attempts; sending payment receipt email without attachment`,
+    );
+  }
+
   try {
     await sendNipaMailHtml(
       email,
       `Payment Receipt - ${orderNumber} | 25th ACCP 2026`,
-      htmlContent
+      htmlContent,
+      attachments,
     );
     console.log(
       `Payment receipt email sent to ${email} for order ${orderNumber}`,
