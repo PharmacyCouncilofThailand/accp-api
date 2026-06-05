@@ -19,6 +19,7 @@ import * as libre from "libreoffice-convert";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const XML_INVALID_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g;
 
 // In dev (tsx) __dirname = src/services, in prod __dirname = dist/services
 // Templates live at src/templates/ in dev OR dist/templates/ in prod (after copy)
@@ -47,11 +48,24 @@ async function renderDocxTemplate(
     paragraphLoop: true,
     linebreaks: true,
   });
-  doc.render(data);
+  doc.render(sanitizeTemplateData(data));
   return doc.getZip().generate({
     type: "nodebuffer",
     compression: "DEFLATE",
   });
+}
+
+function sanitizeTemplateData(data: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [
+      key,
+      sanitizeXmlText(value),
+    ])
+  );
+}
+
+function sanitizeXmlText(value: string): string {
+  return (value ?? "").replace(XML_INVALID_CHARS, " ");
 }
 
 /** Convert a .docx buffer to PDF via LibreOffice. */
@@ -130,8 +144,12 @@ export async function renderAbstractAcceptDocx(
   return renderDocxTemplate(templateFile, {
     participantName: data.participantName,
     acceptDate: data.acceptDate,
-    abstractTitle: data.abstractTitle,
+    abstractTitle: normalizeAbstractTitle(data.abstractTitle),
   });
+}
+
+function normalizeAbstractTitle(title: string): string {
+  return sanitizeXmlText(title).replace(/\s+/g, " ").trim();
 }
 
 /** Render the abstract-accepted letter and convert to PDF via LibreOffice. */

@@ -122,6 +122,100 @@ function cleanRunForTag(input: string, tag: string): string {
   });
 }
 
+function centerHeaderImage(input: string): string {
+  const re =
+    /<wp:positionH relativeFrom="column">\s*<wp:posOffset>-?\d+<\/wp:posOffset>\s*<\/wp:positionH>/;
+  if (!re.test(input)) {
+    console.warn("  [warn] header image horizontal anchor not found");
+    return input;
+  }
+  return input.replace(
+    re,
+    '<wp:positionH relativeFrom="page"><wp:align>center</wp:align></wp:positionH>'
+  );
+}
+
+function titleParagraphXml(): string {
+  return [
+    '<w:p w:rsidR="00000000" w:rsidDel="00000000" w:rsidP="00000000" w:rsidRDefault="00000000" w:rsidRPr="00000000">',
+    "<w:pPr>",
+    '<w:spacing w:after="0" w:before="0" w:line="240" w:lineRule="auto"/>',
+    '<w:ind w:firstLine="720"/>',
+    '<w:jc w:val="left"/>',
+    "<w:rPr>",
+    '<w:rFonts w:ascii="Times New Roman" w:cs="Times New Roman" w:eastAsia="Times New Roman" w:hAnsi="Times New Roman"/>',
+    '<w:sz w:val="24"/>',
+    '<w:szCs w:val="24"/>',
+    "</w:rPr>",
+    "</w:pPr>",
+    '<w:r w:rsidDel="00000000" w:rsidR="00000000" w:rsidRPr="00000000">',
+    "<w:rPr>",
+    '<w:rFonts w:ascii="Times New Roman" w:cs="Times New Roman" w:eastAsia="Times New Roman" w:hAnsi="Times New Roman"/>',
+    '<w:sz w:val="24"/>',
+    '<w:szCs w:val="24"/>',
+    '<w:rtl w:val="0"/>',
+    "</w:rPr>",
+    '<w:t xml:space="preserve">&quot;</w:t>',
+    "</w:r>",
+  ].join("");
+}
+
+function splitAbstractTitleIntoLeftParagraph(input: string): string {
+  const re = new RegExp(
+    [
+      '(<w:r\\b[^>]*>(?:(?!</w:r>)[\\s\\S])*?<w:t xml:space="preserve">)',
+      "titled &quot;",
+      "(</w:t>(?:(?!</w:r>)[\\s\\S])*?</w:r>)",
+      "(\\s*<w:r\\b[^>]*>(?:(?!</w:r>)[\\s\\S])*?<w:t>\\{abstractTitle\\}</w:t>(?:(?!</w:r>)[\\s\\S])*?</w:r>)",
+    ].join(""),
+    "g"
+  );
+  let replaced = 0;
+  const out = input.replace(re, (_m, head, tail, abstractTitleRun) => {
+    replaced += 1;
+    return `${head}titled${tail}</w:p>${titleParagraphXml()}${abstractTitleRun}`;
+  });
+  if (replaced !== 1) {
+    console.warn(
+      `  [warn] expected to split one abstract-title paragraph, split ${replaced}`
+    );
+  }
+  return out;
+}
+
+function titleCaseFirstPosterLiteral(input: string): string {
+  return input.replace(
+    '<w:t xml:space="preserve">poster</w:t>',
+    '<w:t xml:space="preserve">Poster</w:t>'
+  );
+}
+
+function ensureDoNotExpandShiftReturn(zip: PizZip): void {
+  const settingsFile = zip.file("word/settings.xml");
+  if (!settingsFile) {
+    console.warn("  [warn] word/settings.xml not found");
+    return;
+  }
+
+  let settingsXml = settingsFile.asText();
+  if (settingsXml.includes("<w:doNotExpandShiftReturn")) return;
+
+  const compatRe = /<w:compat\b[^>]*>/;
+  if (compatRe.test(settingsXml)) {
+    settingsXml = settingsXml.replace(
+      compatRe,
+      (match) => `${match}<w:doNotExpandShiftReturn/>`
+    );
+  } else {
+    settingsXml = settingsXml.replace(
+      "</w:settings>",
+      "<w:compat><w:doNotExpandShiftReturn/></w:compat></w:settings>"
+    );
+  }
+
+  zip.file("word/settings.xml", settingsXml);
+}
+
 function processSource(target: Target): void {
   if (!fs.existsSync(target.src)) {
     console.error(`Source DOCX not found: ${target.src}`);
@@ -183,6 +277,22 @@ function processSource(target: Target): void {
   ]) {
     xml = cleanRunForTag(xml, tag);
   }
+
+  if (target.type === "poster") {
+    xml = titleCaseFirstPosterLiteral(xml);
+  }
+
+  xml = splitAbstractTitleIntoLeftParagraph(xml);
+
+  // Keep the committee header centred on the physical page. The source files
+  // anchor the header image to the text column, which makes it sit slightly
+  // to the right when converted by LibreOffice.
+  xml = centerHeaderImage(xml);
+
+  // Prevent Word/LibreOffice from stretching spaces on manual line breaks.
+  // This lets long all-caps paper titles sit on their own left-aligned lines
+  // while the surrounding body paragraphs remain justified.
+  ensureDoNotExpandShiftReturn(zip);
 
   const after = xml.length;
   console.log(
