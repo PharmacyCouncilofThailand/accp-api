@@ -139,7 +139,7 @@ function titleParagraphXml(): string {
   return [
     '<w:p w:rsidR="00000000" w:rsidDel="00000000" w:rsidP="00000000" w:rsidRDefault="00000000" w:rsidRPr="00000000">',
     "<w:pPr>",
-    '<w:spacing w:after="0" w:before="0" w:line="240" w:lineRule="auto"/>',
+    '<w:spacing w:after="0" w:before="240" w:line="240" w:lineRule="auto"/>',
     '<w:ind w:firstLine="720"/>',
     '<w:jc w:val="left"/>',
     "<w:rPr>",
