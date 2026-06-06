@@ -170,6 +170,7 @@ import backofficeAbstractAcceptLetterRoutes from "./routes/backoffice/abstract-a
 import publicSpeakersRoutes from "./routes/public/speakers.js";
 import publicEventsRoutes from "./routes/public/events.js";
 import abstractSubmitRoutes from "./routes/public/abstracts/submit.js";
+import acceptedAbstractsRoutes from "./routes/public/abstracts/accepted.js";
 import userProfileRoutes from "./routes/public/users/profile.js";
 import userAbstractsRoutes from "./routes/public/abstracts/user.js";
 import publicWorkshopsRoutes from "./routes/public/workshops.js";
@@ -219,6 +220,7 @@ fastify.register(backofficeLoginRoutes, { prefix: "/backoffice" });
 fastify.register(publicEventsRoutes, { prefix: "/api/events" });
 fastify.register(publicSpeakersRoutes, { prefix: "/api/speakers" });
 fastify.register(abstractSubmitRoutes, { prefix: "/api/abstracts" });
+fastify.register(acceptedAbstractsRoutes, { prefix: "/api/abstracts" });
 fastify.register(userProfileRoutes, { prefix: "/api/users" });
 fastify.register(userAbstractsRoutes, { prefix: "/api/abstracts/user" });
 fastify.register(publicWorkshopsRoutes, { prefix: "/api/workshops" });

@@ -181,7 +181,10 @@ export default async function publicWorkshopsRoutes(fastify: FastifyInstance) {
             // Build response
             const workshops = workshopSessions.map((session, index) => {
                 const event = workshopEvents.find(e => e.id === session.eventId);
-                const enrolledCount = enrollmentMap.get(session.id) || 0;
+                let enrolledCount = enrollmentMap.get(session.id) || 0;
+                if (session.sessionCode === 'WORKSHOP-04' || session.id === 11) {
+                    enrolledCount += 20;
+                }
 
                 // Get all tickets for this session
                 const sessionTickets = sessionTicketsMap.get(session.id) || [];
