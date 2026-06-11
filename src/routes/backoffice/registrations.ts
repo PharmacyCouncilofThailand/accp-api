@@ -496,7 +496,7 @@ export default async function (fastify: FastifyInstance) {
 
                 // 4. Check duplicate: same user + event + ticket type
                 const [existing] = await tx
-                    .select({ id: registrations.id })
+                    .select({ id: registrations.id, regCode: registrations.regCode })
                     .from(registrations)
                     .where(and(
                         eq(registrations.userId, userId),
@@ -505,7 +505,10 @@ export default async function (fastify: FastifyInstance) {
                         eq(registrations.status, "confirmed"),
                     ))
                     .limit(1);
-                if (existing) throw new Error("DUPLICATE_REGISTRATION");
+
+                if (existing && addonTickets.length === 0) {
+                    throw new Error("DUPLICATE_REGISTRATION");
+                }
 
                 if (selectedAddonTicketIds.length > 0) {
                     const relatedAddonTicketIds = await getRelatedAddonTicketIds(tx, selectedAddonTicketIds);
@@ -524,50 +527,75 @@ export default async function (fastify: FastifyInstance) {
                 }
 
                 // 5. Check quota
-                if (ticket.quota > 0 && ticket.soldCount >= ticket.quota) throw new Error("TICKET_SOLD_OUT");
+                if (!existing) {
+                    if (ticket.quota > 0 && ticket.soldCount >= ticket.quota) throw new Error("TICKET_SOLD_OUT");
+                }
                 for (const addon of addonTickets) {
                     if (addon.quota > 0 && addon.soldCount >= addon.quota) {
                         throw new Error("ADDON_TICKET_SOLD_OUT");
                     }
                 }
 
-                // 6. Generate regCode & insert registration
-                const regCode = generateRegCode();
-                const [newReg] = await tx.insert(registrations).values({
-                    regCode,
-                    eventId,
-                    ticketTypeId,
-                    userId,
-                    email: user.email,
-                    firstName: user.firstName,
-                    middleName: user.middleName,
-                    lastName: user.lastName,
-                    status: "confirmed",
-                    source: "manual",
-                    addedBy: staffUser.id,
-                    addedNote: note || null,
-                }).returning();
+                let finalReg: { id: number; regCode: string };
+                if (existing) {
+                    finalReg = existing;
+                } else {
+                    // 6. Generate regCode & insert registration
+                    const regCode = generateRegCode();
+                    const [newReg] = await tx.insert(registrations).values({
+                        regCode,
+                        eventId,
+                        ticketTypeId,
+                        userId,
+                        email: user.email,
+                        firstName: user.firstName,
+                        middleName: user.middleName,
+                        lastName: user.lastName,
+                        status: "confirmed",
+                        source: "manual",
+                        addedBy: staffUser.id,
+                        addedNote: note || null,
+                    }).returning();
+                    finalReg = { id: newReg.id, regCode: newReg.regCode };
+                }
 
                 // 7. Determine sessions to link. Add-ons always use their own ticket type.
                 const addonSessionLinks = await getAddonSessionLinks(tx, eventId, addonTickets, selectionMap);
                 const addonSessionIds = new Set(addonSessionLinks.map(link => link.sessionId));
-                const sessionsToLink = (await resolvePrimarySessionIds(tx, eventId, ticketTypeId, sessionIds || [], selectionMap))
-                    .filter((sid) => !addonSessionIds.has(sid));
+
+                let sessionsToLink: number[] = [];
+                if (!existing) {
+                    sessionsToLink = (await resolvePrimarySessionIds(tx, eventId, ticketTypeId, sessionIds || [], selectionMap))
+                        .filter((sid) => !addonSessionIds.has(sid));
+                }
+
+                // Get already linked sessions to avoid duplicates
+                const existingSessions = existing
+                    ? await tx
+                        .select({ sessionId: registrationSessions.sessionId })
+                        .from(registrationSessions)
+                        .where(eq(registrationSessions.registrationId, finalReg.id))
+                    : [];
+                const existingSessionIds = new Set(existingSessions.map((s: { sessionId: number }) => s.sessionId));
+
+                const addonSessionLinksToInsert = addonSessionLinks.filter(link => !existingSessionIds.has(link.sessionId));
 
                 // 8. Insert registration_sessions
-                for (const sid of sessionsToLink) {
-                    await tx.insert(registrationSessions).values({
-                        registrationId: newReg.id,
-                        sessionId: sid,
-                        ticketTypeId,
-                        source: "manual",
-                        addedBy: staffUser.id,
-                        addedNote: note || null,
-                    });
+                if (!existing) {
+                    for (const sid of sessionsToLink) {
+                        await tx.insert(registrationSessions).values({
+                            registrationId: finalReg.id,
+                            sessionId: sid,
+                            ticketTypeId,
+                            source: "manual",
+                            addedBy: staffUser.id,
+                            addedNote: note || null,
+                        });
+                    }
                 }
-                for (const link of addonSessionLinks) {
+                for (const link of addonSessionLinksToInsert) {
                     await tx.insert(registrationSessions).values({
-                        registrationId: newReg.id,
+                        registrationId: finalReg.id,
                         sessionId: link.sessionId,
                         ticketTypeId: link.ticketTypeId,
                         source: "manual",
@@ -577,10 +605,12 @@ export default async function (fastify: FastifyInstance) {
                 }
 
                 // 9. Update soldCount
-                await tx
-                    .update(ticketTypes)
-                    .set({ soldCount: sql`${ticketTypes.soldCount} + 1` })
-                    .where(eq(ticketTypes.id, ticketTypeId));
+                if (!existing) {
+                    await tx
+                        .update(ticketTypes)
+                        .set({ soldCount: sql`${ticketTypes.soldCount} + 1` })
+                        .where(eq(ticketTypes.id, ticketTypeId));
+                }
                 for (const addon of addonTickets) {
                     await tx
                         .update(ticketTypes)
@@ -590,11 +620,12 @@ export default async function (fastify: FastifyInstance) {
 
                 const allLinkedSessionIds = uniquePositiveIds([
                     ...sessionsToLink,
-                    ...addonSessionLinks.map(link => link.sessionId),
+                    ...addonSessionLinksToInsert.map(link => link.sessionId),
                 ]);
 
                 return {
-                    ...newReg,
+                    id: finalReg.id,
+                    regCode: finalReg.regCode,
                     ticketName: ticket.name,
                     eventName: event.eventName,
                     eventRow: event,
@@ -1158,6 +1189,24 @@ export default async function (fastify: FastifyInstance) {
                     alreadyHasSelectedAddon = new Set(existingAddonRegs.map(r => r.userId));
                 }
 
+                // Get existing registrations for the users who are registered
+                const existingRegsMap = new Map<number, { id: number; regCode: string }>();
+                if (alreadyRegistered.size > 0) {
+                    const regs = await tx
+                        .select({ id: registrations.id, userId: registrations.userId, regCode: registrations.regCode })
+                        .from(registrations)
+                        .where(and(
+                            inArray(registrations.userId, Array.from(alreadyRegistered).filter((id): id is number => id !== null)),
+                            eq(registrations.eventId, eventId),
+                            eq(registrations.status, "confirmed"),
+                        ));
+                    for (const r of regs) {
+                        if (r.userId !== null) {
+                            existingRegsMap.set(r.userId, { id: r.id, regCode: r.regCode });
+                        }
+                    }
+                }
+
                 // 5. Determine sessions to link
                 const addonSessionLinks = await getAddonSessionLinks(tx, eventId, addonTickets, selectionMap);
                 const addonSessionIds = new Set(addonSessionLinks.map(link => link.sessionId));
@@ -1176,7 +1225,8 @@ export default async function (fastify: FastifyInstance) {
                         skippedList.push({ userId, reason: "USER_NOT_FOUND" });
                         continue;
                     }
-                    if (alreadyRegistered.has(userId)) {
+                    const isAlreadyReg = alreadyRegistered.has(userId);
+                    if (isAlreadyReg && addonTickets.length === 0) {
                         skippedList.push({ userId, reason: "ALREADY_REGISTERED" });
                         continue;
                     }
@@ -1186,9 +1236,11 @@ export default async function (fastify: FastifyInstance) {
                     }
 
                     // Check quota
-                    if (ticket.quota > 0 && ticket.soldCount + addedCount >= ticket.quota) {
-                        skippedList.push({ userId, reason: "TICKET_SOLD_OUT" });
-                        continue;
+                    if (!isAlreadyReg) {
+                        if (ticket.quota > 0 && ticket.soldCount + addedCount >= ticket.quota) {
+                            skippedList.push({ userId, reason: "TICKET_SOLD_OUT" });
+                            continue;
+                        }
                     }
                     const soldOutAddon = addonTickets.find((addon) => (
                         addon.quota > 0 &&
@@ -1199,37 +1251,64 @@ export default async function (fastify: FastifyInstance) {
                         continue;
                     }
 
-                    // Insert registration
-                    const regCode = generateRegCode();
-                    const [newReg] = await tx.insert(registrations).values({
-                        regCode,
-                        eventId,
-                        ticketTypeId,
-                        userId,
-                        email: user.email,
-                        firstName: user.firstName,
-                        middleName: user.middleName,
-                        lastName: user.lastName,
-                        status: "confirmed",
-                        source: "manual",
-                        addedBy: staffUser.id,
-                        addedNote: note || null,
-                    }).returning();
+                    let regId: number;
+                    let regCode: string;
+                    let isNewReg = !isAlreadyReg;
 
-                    // Insert registration_sessions
-                    for (const sid of sessionsToLink) {
-                        await tx.insert(registrationSessions).values({
-                            registrationId: newReg.id,
-                            sessionId: sid,
+                    if (isNewReg) {
+                        // Insert registration
+                        const generatedCode = generateRegCode();
+                        const [newReg] = await tx.insert(registrations).values({
+                            regCode: generatedCode,
+                            eventId,
                             ticketTypeId,
+                            userId,
+                            email: user.email,
+                            firstName: user.firstName,
+                            middleName: user.middleName,
+                            lastName: user.lastName,
+                            status: "confirmed",
                             source: "manual",
                             addedBy: staffUser.id,
                             addedNote: note || null,
-                        });
+                        }).returning();
+                        regId = newReg.id;
+                        regCode = newReg.regCode;
+                    } else {
+                        const existingInfo = existingRegsMap.get(userId);
+                        if (!existingInfo) {
+                            skippedList.push({ userId, reason: "REGISTRATION_NOT_FOUND" });
+                            continue;
+                        }
+                        regId = existingInfo.id;
+                        regCode = existingInfo.regCode;
                     }
-                    for (const link of addonSessionLinks) {
+
+                    // Insert registration_sessions
+                    if (isNewReg) {
+                        for (const sid of sessionsToLink) {
+                            await tx.insert(registrationSessions).values({
+                                registrationId: regId,
+                                sessionId: sid,
+                                ticketTypeId,
+                                source: "manual",
+                                addedBy: staffUser.id,
+                                addedNote: note || null,
+                            });
+                        }
+                    }
+
+                    // Filter addonSessionLinks to only those that aren't already linked for this registration
+                    const existingSessionsForReg = isNewReg ? [] : await tx
+                        .select({ sessionId: registrationSessions.sessionId })
+                        .from(registrationSessions)
+                        .where(eq(registrationSessions.registrationId, regId));
+                    const existingSessionIds = new Set(existingSessionsForReg.map((s: { sessionId: number }) => s.sessionId));
+                    const addonSessionLinksToInsert = addonSessionLinks.filter(link => !existingSessionIds.has(link.sessionId));
+
+                    for (const link of addonSessionLinksToInsert) {
                         await tx.insert(registrationSessions).values({
-                            registrationId: newReg.id,
+                            registrationId: regId,
                             sessionId: link.sessionId,
                             ticketTypeId: link.ticketTypeId,
                             source: "manual",
@@ -1238,14 +1317,16 @@ export default async function (fastify: FastifyInstance) {
                         });
                     }
 
-                    addedCount++;
+                    if (isNewReg) {
+                        addedCount++;
+                    }
                     for (const addon of addonTickets) {
                         addonAddedCounts.set(addon.id, (addonAddedCounts.get(addon.id) || 0) + 1);
                     }
                     successList.push({
-                        registrationId: newReg.id,
+                        registrationId: regId,
                         userId,
-                        regCode: newReg.regCode,
+                        regCode,
                         firstName: user.firstName,
                         middleName: user.middleName,
                         lastName: user.lastName,
