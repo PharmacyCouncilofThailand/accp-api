@@ -1,6 +1,7 @@
 import axios from "axios";
 import { getFullName } from "../utils/name.js";
 import { formatIssueDate, renderLetterPdf } from "./letter.service.js";
+import { buildThanompongSignatureHtml } from "./emailAssets.js";
 
 // ============================================
 // NipaMail Configuration
@@ -481,7 +482,7 @@ function getAbstractRegistrationUrl(): string {
   ).replace(/\/+$/, "");
 }
 
-function buildAbstractAcceptedNoRegistrationPlainText(
+function buildAbstractAcceptedNoRegistrationMainBody(
   firstName: string,
   middleName: string | null,
   lastName: string,
@@ -510,12 +511,50 @@ Final Registration Deadline: ${ABSTRACT_REGISTRATION_DEADLINE}
 
 If you have already completed your registration recently, please disregard this message.
 
-Thank you for your prompt attention to this matter. We look forward to welcoming you to Bangkok for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).
+Thank you for your prompt attention to this matter. We look forward to welcoming you to Bangkok for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).`;
+}
+
+function buildAbstractAcceptedNoRegistrationClosing(): string {
+  return `Asst. Prof. Dr. Thanompong Sathienluckana
+Chair of the Abstract Review Working Group
+The 25th Asian Conference on Clinical Pharmacy (2026 ACCP)`;
+}
+
+function buildAbstractAcceptedNoRegistrationPlainText(
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  abstractTitle: string,
+  presentationType: "oral" | "poster",
+): string {
+  return `${buildAbstractAcceptedNoRegistrationMainBody(firstName, middleName, lastName, abstractTitle, presentationType)}
 
 Yours sincerely,
-Asst. Prof. Dr. Thanompong Sathienluckana
-Chair of the Abstract Review Working Group
-The 25th Asian Conference on Clinical Pharmacy (2026 ACCP)`.trim();
+${buildAbstractAcceptedNoRegistrationClosing()}`.trim();
+}
+
+function escapePlainTextForHtml(plainText: string): string {
+  return plainText
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function buildAbstractAcceptedNoRegistrationHtml(
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  abstractTitle: string,
+  presentationType: "oral" | "poster",
+  options?: { preview?: boolean },
+): string {
+  const mainHtml = escapePlainTextForHtml(
+    buildAbstractAcceptedNoRegistrationMainBody(firstName, middleName, lastName, abstractTitle, presentationType),
+  ).replace(/\n/g, "<br>\n");
+  const closingHtml = escapePlainTextForHtml(buildAbstractAcceptedNoRegistrationClosing()).replace(/\n/g, "<br>\n");
+  const signatureImg = buildThanompongSignatureHtml({ inline: options?.preview });
+  const bodyHtml = `${mainHtml}<br><br>Yours sincerely,<br>${signatureImg}${closingHtml}`;
+  return wrapEmailBodyHtml(bodyHtml);
 }
 
 /**
@@ -531,7 +570,7 @@ export async function sendAbstractAcceptedNoRegistrationEmail(
   presentationType: "oral" | "poster",
   meta?: { abstractId?: number; trackingId?: string | null },
 ): Promise<void> {
-  const plainText = buildAbstractAcceptedNoRegistrationPlainText(
+  const html = buildAbstractAcceptedNoRegistrationHtml(
     firstName, middleName, lastName, abstractTitle, presentationType,
   );
   const tracking = meta?.trackingId ?? (meta?.abstractId != null ? `#${meta.abstractId}` : "unknown");
@@ -539,10 +578,10 @@ export async function sendAbstractAcceptedNoRegistrationEmail(
   const name = getFullName(firstName, middleName, lastName);
 
   try {
-    await sendNipaMailEmail(
+    await sendNipaMailHtml(
       email,
       `Registration Required by ${ABSTRACT_REGISTRATION_DEADLINE} to Confirm Your Presentation at 2026 ACCP Bangkok`,
-      plainText,
+      html,
     );
     console.log(
       `[email-manual] abstract-accepted-no-registration sent | ${tracking} | ${typeLabel} | ${name} <${email}>`,
@@ -1090,6 +1129,13 @@ Bangkok Thailand
 // ============================================
 
 /**
+ * Wrap inner body HTML in the standard email layout shell.
+ */
+function wrapEmailBodyHtml(bodyHtml: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Email Preview</title></head><body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;"><div style="max-width:600px;margin:24px auto;background:#ffffff;border-radius:8px;padding:32px 40px;box-shadow:0 2px 8px rgba(0,0,0,0.08);"><div style="color:#374151;font-size:14px;line-height:1.8;">${bodyHtml}</div><hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;"><p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">25th ACCP Annual Conference 2026 · Bangkok, Thailand</p></div></body></html>`;
+}
+
+/**
  * Wrap plain text in a clean HTML email template
  * Mimics the conversion done by sendNipaMailEmail (which calls sendNipaMailHtml internally)
  */
@@ -1099,7 +1145,7 @@ export function buildEmailHtmlFromText(plainText: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/\n/g, "<br>\n");
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Email Preview</title></head><body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;"><div style="max-width:600px;margin:24px auto;background:#ffffff;border-radius:8px;padding:32px 40px;box-shadow:0 2px 8px rgba(0,0,0,0.08);"><div style="color:#374151;font-size:14px;line-height:1.8;">${bodyHtml}</div><hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;"><p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">25th ACCP Annual Conference 2026 · Bangkok, Thailand</p></div></body></html>`;
+  return wrapEmailBodyHtml(bodyHtml);
 }
 
 export function buildSignupNotificationEmailContent(
@@ -1152,12 +1198,11 @@ export function buildAbstractAcceptedNoRegistrationEmailContent(
   abstractTitle: string,
   presentationType: "oral" | "poster",
 ): { subject: string; html: string } {
-  const plainText = buildAbstractAcceptedNoRegistrationPlainText(
-    firstName, middleName, lastName, abstractTitle, presentationType,
-  );
   return {
     subject: `Registration Required by ${ABSTRACT_REGISTRATION_DEADLINE} to Confirm Your Presentation at 2026 ACCP Bangkok`,
-    html: buildEmailHtmlFromText(plainText),
+    html: buildAbstractAcceptedNoRegistrationHtml(
+      firstName, middleName, lastName, abstractTitle, presentationType, { preview: true },
+    ),
   };
 }
 

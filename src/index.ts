@@ -10,6 +10,7 @@ import fastifyStatic from "@fastify/static";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
+import { readThanompongSignaturePng, thanompongSignaturePublicPath } from "./services/emailAssets.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -61,6 +62,20 @@ fastify.register(multipart, {
 });
 fastify.register(jwt, {
   secret: JWT_SECRET,
+});
+
+// Email signature image — explicit route so production serves from bundled assets
+fastify.get(thanompongSignaturePublicPath, async (_request, reply) => {
+  try {
+    const png = readThanompongSignaturePng();
+    return reply
+      .type("image/png")
+      .header("Cache-Control", "public, max-age=31536000, immutable")
+      .send(png);
+  } catch (err) {
+    fastify.log.error(err, "thanompong signature asset missing");
+    return reply.status(404).send({ success: false, error: "Signature image not found" });
+  }
 });
 
 // ============================================================================
