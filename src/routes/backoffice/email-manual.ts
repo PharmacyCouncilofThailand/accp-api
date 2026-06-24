@@ -12,7 +12,7 @@ import {
   events,
   abstracts,
 } from "../../database/schema.js";
-import { eq, and, ilike, or, inArray, desc } from "drizzle-orm";
+import { eq, and, ilike, or, inArray, desc, asc, notExists, isNotNull, sql } from "drizzle-orm";
 import {
   sendSignupNotificationEmail,
   sendPendingApprovalEmail,
@@ -20,6 +20,7 @@ import {
   sendAbstractSubmissionEmail,
   sendAbstractAcceptedPosterEmail,
   sendAbstractAcceptedOralEmail,
+  sendAbstractAcceptedNoRegistrationEmail,
   sendAbstractRejectedEmail,
   sendManualRegistrationEmail,
   sendApprovalRequestEmail,
@@ -30,6 +31,7 @@ import {
   buildAbstractSubmissionEmailContent,
   buildAbstractAcceptedPosterEmailContent,
   buildAbstractAcceptedOralEmailContent,
+  buildAbstractAcceptedNoRegistrationEmailContent,
   buildAbstractRejectedEmailContent,
   buildApprovalRequestEmailContent,
   buildAcademicAcceptanceEmailContent,
@@ -110,6 +112,12 @@ const TEMPLATE_CONFIG = {
     requiresComment: false,
     description: "Acceptance letter for accepted abstracts (with type-specific letter PDF)",
   },
+  "abstract-accepted-no-registration": {
+    label: "Accepted — Not Yet Registered",
+    recipientType: "abstract" as const,
+    requiresComment: false,
+    description: "Registration reminder for accepted oral/poster presenters without conference registration or paid ticket",
+  },
 } as const;
 
 type TemplateId = keyof typeof TEMPLATE_CONFIG;
@@ -138,6 +146,40 @@ function sortPrimaryFirst<T extends { type: string }>(items: T[]): T[] {
     if (a.type !== "ticket" && b.type === "ticket") return 1;
     return 0;
   });
+}
+
+/** Accepted abstract authors with no confirmed primary registration and no paid ticket order. */
+function acceptedAbstractWithoutRegistrationCond() {
+  const noConfirmedRegistration = notExists(
+    db
+      .select({ id: registrations.id })
+      .from(registrations)
+      .innerJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
+      .where(and(
+        eq(registrations.userId, abstracts.userId),
+        eq(registrations.eventId, abstracts.eventId),
+        eq(registrations.status, "confirmed" as any),
+        eq(ticketTypes.category, "primary" as any),
+      )),
+  );
+  const noPaidTicket = notExists(
+    db
+      .select({ id: orders.id })
+      .from(orders)
+      .innerJoin(orderItems, eq(orderItems.orderId, orders.id))
+      .where(and(
+        eq(orders.userId, abstracts.userId),
+        eq(orders.eventId, abstracts.eventId),
+        eq(orders.status, "paid" as any),
+        eq(orderItems.itemType, "ticket" as any),
+      )),
+  );
+  return and(
+    eq(abstracts.status, "accepted" as any),
+    isNotNull(abstracts.userId),
+    noConfirmedRegistration,
+    noPaidTicket,
+  );
 }
 
 function buildManualRegistrationEmailContent(
@@ -429,8 +471,19 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           statusCond = eq(abstracts.status, "rejected" as any);
         } else if (template === "academic-acceptance") {
           statusCond = eq(abstracts.status, "accepted" as any);
+        } else if (template === "abstract-accepted-no-registration") {
+          statusCond = acceptedAbstractWithoutRegistrationCond();
         }
         // abstract-submission: no status filter — all abstracts
+
+        const abstractOrderBy =
+          template === "abstract-accepted-no-registration"
+            ? [
+                sql`CASE WHEN ${abstracts.presentationType} = 'poster' THEN 0 ELSE 1 END`,
+                asc(abstracts.trackingId),
+                asc(abstracts.id),
+              ]
+            : [desc(abstracts.updatedAt)];
 
         const rows = await db
           .select({
@@ -446,7 +499,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
             ilike(users.email, `%${search}%`),
             ilike(users.firstName, `%${search}%`),
           ) : undefined))
-          .orderBy(desc(abstracts.updatedAt))
+          .orderBy(...abstractOrderBy)
           .limit(MAX);
 
         recipients = rows.map((a) => ({
@@ -639,6 +692,62 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
         } else {
           content = buildAbstractRejectedEmailContent(author.firstName, author.middleName, author.lastName, ab.title, comment);
         }
+        return reply.send({ success: true, to: author.email, ...content });
+
+      } else if (template === "abstract-accepted-no-registration") {
+        const [ab] = await db
+          .select({
+            trackingId: abstracts.trackingId,
+            title: abstracts.title,
+            userId: abstracts.userId,
+            status: abstracts.status,
+            presentationType: abstracts.presentationType,
+            eventId: abstracts.eventId,
+          })
+          .from(abstracts).where(eq(abstracts.id, numId)).limit(1);
+        if (!ab) return reply.status(404).send({ success: false, error: "Abstract not found" });
+        if (ab.status !== "accepted") {
+          return reply.status(400).send({ success: false, error: "This reminder is only for accepted abstracts" });
+        }
+        if (!ab.userId) return reply.status(400).send({ success: false, error: "Abstract has no author" });
+        const [author] = await db
+          .select({ email: users.email, firstName: users.firstName, middleName: users.middleName, lastName: users.lastName })
+          .from(users).where(eq(users.id, ab.userId)).limit(1);
+        if (!author) return reply.status(404).send({ success: false, error: "Author not found" });
+
+        const [hasRegistration] = await db
+          .select({ id: registrations.id })
+          .from(registrations)
+          .innerJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
+          .where(and(
+            eq(registrations.userId, ab.userId),
+            eq(registrations.eventId, ab.eventId),
+            eq(registrations.status, "confirmed" as any),
+            eq(ticketTypes.category, "primary" as any),
+          ))
+          .limit(1);
+        if (hasRegistration) {
+          return reply.status(400).send({ success: false, error: "Author already has a confirmed conference registration" });
+        }
+        const [hasPaidTicket] = await db
+          .select({ id: orders.id })
+          .from(orders)
+          .innerJoin(orderItems, eq(orderItems.orderId, orders.id))
+          .where(and(
+            eq(orders.userId, ab.userId),
+            eq(orders.eventId, ab.eventId),
+            eq(orders.status, "paid" as any),
+            eq(orderItems.itemType, "ticket" as any),
+          ))
+          .limit(1);
+        if (hasPaidTicket) {
+          return reply.status(400).send({ success: false, error: "Author already has a paid ticket order" });
+        }
+
+        const presentationType = ab.presentationType === "oral" ? "oral" : "poster";
+        const content = buildAbstractAcceptedNoRegistrationEmailContent(
+          author.firstName, author.middleName, author.lastName, ab.title, presentationType,
+        );
         return reply.send({ success: true, to: author.email, ...content });
 
       } else if (template === "manual-registration") {
@@ -846,6 +955,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               trackingId: abstracts.trackingId,
               title: abstracts.title,
               userId: abstracts.userId,
+              eventId: abstracts.eventId,
               status: abstracts.status,
               presentationType: abstracts.presentationType,
               updatedAt: abstracts.updatedAt,
@@ -883,6 +993,45 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               await sendAbstractAcceptedOralEmail(author.email, author.firstName, author.middleName, author.lastName, ab.title, comment);
             } else if (template === "abstract-rejected") {
               await sendAbstractRejectedEmail(author.email, author.firstName, author.middleName, author.lastName, ab.title, comment);
+            } else if (template === "abstract-accepted-no-registration") {
+              if (ab.status !== "accepted") {
+                results.push({ id, email: author.email, name: fullName, type: template, status: "skipped", reason: `Abstract status is "${ab.status}" (must be accepted)` });
+                continue;
+              }
+              const [hasRegistration] = await db
+                .select({ id: registrations.id })
+                .from(registrations)
+                .innerJoin(ticketTypes, eq(registrations.ticketTypeId, ticketTypes.id))
+                .where(and(
+                  eq(registrations.userId, ab.userId!),
+                  eq(registrations.eventId, ab.eventId),
+                  eq(registrations.status, "confirmed" as any),
+                  eq(ticketTypes.category, "primary" as any),
+                ))
+                .limit(1);
+              if (hasRegistration) {
+                results.push({ id, email: author.email, name: fullName, type: template, status: "skipped", reason: "Author already has a confirmed conference registration" });
+                continue;
+              }
+              const [hasPaidTicket] = await db
+                .select({ id: orders.id })
+                .from(orders)
+                .innerJoin(orderItems, eq(orderItems.orderId, orders.id))
+                .where(and(
+                  eq(orders.userId, ab.userId!),
+                  eq(orders.eventId, ab.eventId),
+                  eq(orders.status, "paid" as any),
+                  eq(orderItems.itemType, "ticket" as any),
+                ))
+                .limit(1);
+              if (hasPaidTicket) {
+                results.push({ id, email: author.email, name: fullName, type: template, status: "skipped", reason: "Author already has a paid ticket order" });
+                continue;
+              }
+              const presentationType = ab.presentationType === "oral" ? "oral" : "poster";
+              await sendAbstractAcceptedNoRegistrationEmail(
+                author.email, author.firstName, author.middleName, author.lastName, ab.title, presentationType,
+              );
             } else if (template === "academic-acceptance") {
               if (ab.status !== "accepted") {
                 results.push({ id, email: author.email, name: fullName, type: template, status: "skipped", reason: `Abstract status is "${ab.status}" (must be accepted)` });

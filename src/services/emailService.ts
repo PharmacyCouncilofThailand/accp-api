@@ -471,6 +471,82 @@ Bangkok Thailand
   }
 }
 
+const ABSTRACT_REGISTRATION_DEADLINE = "28 June 2026";
+
+function getAbstractRegistrationUrl(): string {
+  return (
+    process.env.WEBSITE_URL ||
+    process.env.BASE_URL ||
+    "https://accp2026bangkok.pharmacycouncil.org"
+  ).replace(/\/+$/, "");
+}
+
+function buildAbstractAcceptedNoRegistrationPlainText(
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  abstractTitle: string,
+  presentationType: "oral" | "poster",
+): string {
+  const typeLabel = presentationType === "poster" ? "Poster" : "Oral";
+  const registrationUrl = getAbstractRegistrationUrl();
+
+  return `Dear ${getFullName(firstName, middleName, lastName)},
+
+This is an urgent reminder regarding your accepted abstract:
+${typeLabel} titled "${abstractTitle}" for presentation at the conference.
+
+According to our records, your conference registration has not yet been completed. Please be advised that the registration deadline is ${ABSTRACT_REGISTRATION_DEADLINE}.
+
+To maintain your presentation status, all presenting authors must complete their registration and payment by the deadline. Failure to do so may result in:
+Removal of the abstract from the official conference abstract booklet;
+Exclusion from the conference program; and
+Loss of eligibility to present at the conference.
+
+Please complete your registration as soon as possible via:
+${registrationUrl}
+
+Final Registration Deadline: ${ABSTRACT_REGISTRATION_DEADLINE}
+
+If you have already completed your registration recently, please disregard this message.
+
+Thank you for your prompt attention to this matter. We look forward to welcoming you to Bangkok for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).
+
+Yours sincerely,
+Asst. Prof. Dr. Thanompong Sathienluckana
+Chair of the Abstract Review Working Group
+The 25th Asian Conference on Clinical Pharmacy (2026 ACCP)`.trim();
+}
+
+/**
+ * Send registration reminder to accepted abstract authors who have not registered yet.
+ * Template: Accepted oral and poster แต่ยังไม่ลงทะเบียนเข้างาน.docx
+ */
+export async function sendAbstractAcceptedNoRegistrationEmail(
+  email: string,
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  abstractTitle: string,
+  presentationType: "oral" | "poster",
+): Promise<void> {
+  const plainText = buildAbstractAcceptedNoRegistrationPlainText(
+    firstName, middleName, lastName, abstractTitle, presentationType,
+  );
+
+  try {
+    await sendNipaMailEmail(
+      email,
+      `Registration Required by ${ABSTRACT_REGISTRATION_DEADLINE} to Confirm Your Presentation at 2026 ACCP Bangkok`,
+      plainText,
+    );
+    console.log(`Abstract accepted (no registration) reminder sent to ${email}`);
+  } catch (error) {
+    console.error("Error sending abstract accepted no-registration reminder email:", error);
+    throw error;
+  }
+}
+
 /**
  * Send abstract rejected email
  * Template: Abstract notification (Poster) >> Reject
@@ -1058,6 +1134,22 @@ export function buildAbstractAcceptedOralEmailContent(
   const commentText = comment ? `\nComment: ${comment}\n` : "";
   const plainText = `Dear ${getFullName(firstName, middleName, lastName)},\n\nCongratulations! Your abstract, titled "${abstractTitle}", is ACCEPTED as an ORAL PRESENTATION at the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.\n${commentText}\nAll oral presenters must be registered for the meeting in order to present. For registration information and details go to ${websiteUrl}\n\nWe look forward to your presentation. If you have any questions, please contact ${contactEmail}\n\nSincerely,\n25th ACCP committee\nBangkok Thailand`;
   return { subject: "Congratulations! Abstract Accepted (Oral) - 25th ACCP 2026", html: buildEmailHtmlFromText(plainText) };
+}
+
+export function buildAbstractAcceptedNoRegistrationEmailContent(
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  abstractTitle: string,
+  presentationType: "oral" | "poster",
+): { subject: string; html: string } {
+  const plainText = buildAbstractAcceptedNoRegistrationPlainText(
+    firstName, middleName, lastName, abstractTitle, presentationType,
+  );
+  return {
+    subject: `Registration Required by ${ABSTRACT_REGISTRATION_DEADLINE} to Confirm Your Presentation at 2026 ACCP Bangkok`,
+    html: buildEmailHtmlFromText(plainText),
+  };
 }
 
 export function buildAbstractRejectedEmailContent(
