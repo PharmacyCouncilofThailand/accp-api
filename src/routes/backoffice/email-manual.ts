@@ -995,7 +995,9 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               await sendAbstractRejectedEmail(author.email, author.firstName, author.middleName, author.lastName, ab.title, comment);
             } else if (template === "abstract-accepted-no-registration") {
               if (ab.status !== "accepted") {
-                results.push({ id, email: author.email, name: fullName, type: template, status: "skipped", reason: `Abstract status is "${ab.status}" (must be accepted)` });
+                const reason = `Abstract status is "${ab.status}" (must be accepted)`;
+                console.log(`[email-manual] abstract-accepted-no-registration skipped | ${ab.trackingId ?? `#${id}`} | ${reason}`);
+                results.push({ id, email: author.email, name: fullName, type: template, status: "skipped", reason });
                 continue;
               }
               const [hasRegistration] = await db
@@ -1010,7 +1012,9 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
                 ))
                 .limit(1);
               if (hasRegistration) {
-                results.push({ id, email: author.email, name: fullName, type: template, status: "skipped", reason: "Author already has a confirmed conference registration" });
+                const reason = "Author already has a confirmed conference registration";
+                console.log(`[email-manual] abstract-accepted-no-registration skipped | ${ab.trackingId ?? `#${id}`} | ${reason}`);
+                results.push({ id, email: author.email, name: fullName, type: template, status: "skipped", reason });
                 continue;
               }
               const [hasPaidTicket] = await db
@@ -1025,12 +1029,15 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
                 ))
                 .limit(1);
               if (hasPaidTicket) {
-                results.push({ id, email: author.email, name: fullName, type: template, status: "skipped", reason: "Author already has a paid ticket order" });
+                const reason = "Author already has a paid ticket order";
+                console.log(`[email-manual] abstract-accepted-no-registration skipped | ${ab.trackingId ?? `#${id}`} | ${reason}`);
+                results.push({ id, email: author.email, name: fullName, type: template, status: "skipped", reason });
                 continue;
               }
               const presentationType = ab.presentationType === "oral" ? "oral" : "poster";
               await sendAbstractAcceptedNoRegistrationEmail(
                 author.email, author.firstName, author.middleName, author.lastName, ab.title, presentationType,
+                { abstractId: ab.id, trackingId: ab.trackingId },
               );
             } else if (template === "academic-acceptance") {
               if (ab.status !== "accepted") {

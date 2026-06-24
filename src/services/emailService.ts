@@ -529,10 +529,14 @@ export async function sendAbstractAcceptedNoRegistrationEmail(
   lastName: string,
   abstractTitle: string,
   presentationType: "oral" | "poster",
+  meta?: { abstractId?: number; trackingId?: string | null },
 ): Promise<void> {
   const plainText = buildAbstractAcceptedNoRegistrationPlainText(
     firstName, middleName, lastName, abstractTitle, presentationType,
   );
+  const tracking = meta?.trackingId ?? (meta?.abstractId != null ? `#${meta.abstractId}` : "unknown");
+  const typeLabel = presentationType === "poster" ? "Poster" : "Oral";
+  const name = getFullName(firstName, middleName, lastName);
 
   try {
     await sendNipaMailEmail(
@@ -540,9 +544,14 @@ export async function sendAbstractAcceptedNoRegistrationEmail(
       `Registration Required by ${ABSTRACT_REGISTRATION_DEADLINE} to Confirm Your Presentation at 2026 ACCP Bangkok`,
       plainText,
     );
-    console.log(`Abstract accepted (no registration) reminder sent to ${email}`);
+    console.log(
+      `[email-manual] abstract-accepted-no-registration sent | ${tracking} | ${typeLabel} | ${name} <${email}>`,
+    );
   } catch (error) {
-    console.error("Error sending abstract accepted no-registration reminder email:", error);
+    console.error(
+      `[email-manual] abstract-accepted-no-registration failed | ${tracking} | ${typeLabel} | ${name} <${email}>:`,
+      error,
+    );
     throw error;
   }
 }
