@@ -495,14 +495,14 @@ function buildAbstractAcceptedNoRegistrationMainBody(
   return `Dear ${getFullName(firstName, middleName, lastName)},
 
 This is an urgent reminder regarding your accepted abstract:
-${typeLabel} titled "${abstractTitle}" for presentation at the conference.
+    ${typeLabel} titled "${abstractTitle}" for presentation at the conference.
 
 According to our records, your conference registration has not yet been completed. Please be advised that the registration deadline is ${ABSTRACT_REGISTRATION_DEADLINE}.
 
 To maintain your presentation status, all presenting authors must complete their registration and payment by the deadline. Failure to do so may result in:
-Removal of the abstract from the official conference abstract booklet;
-Exclusion from the conference program; and
-Loss of eligibility to present at the conference.
+    • Removal of the abstract from the official conference abstract booklet;
+    • Exclusion from the conference program; and
+    • Loss of eligibility to present at the conference.
 
 Please complete your registration as soon as possible via:
 ${registrationUrl}
@@ -512,6 +512,40 @@ Final Registration Deadline: ${ABSTRACT_REGISTRATION_DEADLINE}
 If you have already completed your registration recently, please disregard this message.
 
 Thank you for your prompt attention to this matter. We look forward to welcoming you to Bangkok for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).`;
+}
+
+function buildAbstractAcceptedNoRegistrationBodyHtml(
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  abstractTitle: string,
+  presentationType: "oral" | "poster",
+): string {
+  const typeLabel = presentationType === "poster" ? "Poster" : "Oral";
+  const registrationUrl = getAbstractRegistrationUrl();
+  const name = escapePlainTextForHtml(getFullName(firstName, middleName, lastName));
+  const title = escapePlainTextForHtml(abstractTitle);
+  const url = escapePlainTextForHtml(registrationUrl);
+  const indent = "margin:0 0 1em 0.5in;";
+  const listStyle = "margin:0 0 1em 0.5in;padding-left:0.2in;";
+
+  return [
+    `<p style="margin:0 0 1em 0;">Dear ${name},</p>`,
+    `<p style="margin:0 0 1em 0;">This is an urgent reminder regarding your accepted abstract:</p>`,
+    `<p style="${indent}">${typeLabel} titled &quot;${title}&quot; for presentation at the conference.</p>`,
+    `<p style="margin:0 0 1em 0;">According to our records, your conference registration has not yet been completed. Please be advised that <strong>the registration deadline is ${ABSTRACT_REGISTRATION_DEADLINE}.</strong></p>`,
+    `<p style="margin:0 0 0.5em 0;">To maintain your presentation status, all presenting authors must complete their registration and payment by the deadline. Failure to do so may result in:</p>`,
+    `<ul style="${listStyle}">`,
+    `<li style="margin-bottom:0.35em;">Removal of the abstract from the official conference abstract booklet;</li>`,
+    `<li style="margin-bottom:0.35em;">Exclusion from the conference program; and</li>`,
+    `<li style="margin-bottom:0.35em;">Loss of eligibility to present at the conference.</li>`,
+    `</ul>`,
+    `<p style="margin:0 0 0.25em 0;">Please complete your registration as soon as possible via:</p>`,
+    `<p style="margin:0 0 1em 0;"><a href="${url}" style="color:#1a73e8;text-decoration:underline;">${url}</a></p>`,
+    `<p style="margin:0 0 1em 0;">Final Registration Deadline: ${ABSTRACT_REGISTRATION_DEADLINE}</p>`,
+    `<p style="margin:0 0 1em 0;">If you have already completed your registration recently, please disregard this message.</p>`,
+    `<p style="margin:0 0 0;">Thank you for your prompt attention to this matter. We look forward to welcoming you to Bangkok for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).</p>`,
+  ].join("\n");
 }
 
 function buildAbstractAcceptedNoRegistrationClosing(): string {
@@ -548,13 +582,13 @@ function buildAbstractAcceptedNoRegistrationHtml(
   presentationType: "oral" | "poster",
   options?: { preview?: boolean },
 ): string {
-  const mainHtml = escapePlainTextForHtml(
-    buildAbstractAcceptedNoRegistrationMainBody(firstName, middleName, lastName, abstractTitle, presentationType),
-  ).replace(/\n/g, "<br>\n");
+  const mainHtml = buildAbstractAcceptedNoRegistrationBodyHtml(
+    firstName, middleName, lastName, abstractTitle, presentationType,
+  );
   const closingHtml = escapePlainTextForHtml(buildAbstractAcceptedNoRegistrationClosing()).replace(/\n/g, "<br>\n");
   const signatureImg = buildThanompongSignatureHtml({ inline: options?.preview });
-  const bodyHtml = `${mainHtml}<br><br>Yours sincerely,<br>${signatureImg}${closingHtml}`;
-  return wrapEmailBodyHtml(bodyHtml);
+  const bodyHtml = `${mainHtml}<p style="margin:1.5em 0 0.5em 0;">Yours sincerely,</p>${signatureImg}<p style="margin:0.75em 0 0;line-height:1.6;">${closingHtml}</p>`;
+  return wrapEmailBodyHtml(bodyHtml, { fontFamily: '"Times New Roman", Times, serif' });
 }
 
 /**
@@ -1131,8 +1165,12 @@ Bangkok Thailand
 /**
  * Wrap inner body HTML in the standard email layout shell.
  */
-function wrapEmailBodyHtml(bodyHtml: string): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Email Preview</title></head><body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;"><div style="max-width:600px;margin:24px auto;background:#ffffff;border-radius:8px;padding:32px 40px;box-shadow:0 2px 8px rgba(0,0,0,0.08);"><div style="color:#374151;font-size:14px;line-height:1.8;">${bodyHtml}</div><hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;"><p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;">25th ACCP Annual Conference 2026 · Bangkok, Thailand</p></div></body></html>`;
+function wrapEmailBodyHtml(
+  bodyHtml: string,
+  options?: { fontFamily?: string },
+): string {
+  const fontFamily = options?.fontFamily ?? "Arial, Helvetica, sans-serif";
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Email Preview</title></head><body style="margin:0;padding:0;background:#f3f4f6;font-family:${fontFamily};"><div style="max-width:600px;margin:24px auto;background:#ffffff;border-radius:8px;padding:32px 40px;box-shadow:0 2px 8px rgba(0,0,0,0.08);"><div style="color:#111827;font-size:14px;line-height:1.8;font-family:${fontFamily};">${bodyHtml}</div><hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;"><p style="color:#9ca3af;font-size:12px;text-align:center;margin:0;font-family:Arial,Helvetica,sans-serif;">25th ACCP Annual Conference 2026 · Bangkok, Thailand</p></div></body></html>`;
 }
 
 /**
