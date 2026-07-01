@@ -13,10 +13,11 @@ const FEE_CONFIG = {
   promptpay: { rate: 0.0135, vat: 0.07, minFee: 5 },
   card: { rate: 0.028, vat: 0.07, minFee: 0 },
   usd_card: { rate: 0.03, vat: 0.07, minFee: 0 },
+  alipay: { rate: 0.025, vat: 0.07, minFee: 0 },
 } as const;
 
 export type PaySolutionsFeeMethod = keyof typeof FEE_CONFIG;
-export type PaySolutionsPaymentMethod = "qr" | "card";
+export type PaySolutionsPaymentMethod = "qr" | "card" | "alipay";
 
 export interface PaySolutionsFeeBreakdown {
   net: number;
@@ -123,6 +124,7 @@ export function resolvePaySolutionsFeeMethod(
   paymentMethod: PaySolutionsPaymentMethod,
   currency: "THB" | "USD"
 ): PaySolutionsFeeMethod {
+  if (paymentMethod === "alipay") return "alipay";
   if (currency === "USD") return "usd_card";
   if (paymentMethod === "qr") return "promptpay";
   return "card";
@@ -131,9 +133,9 @@ export function resolvePaySolutionsFeeMethod(
 export function resolvePaySolutionsChannel(
   paymentMethod: PaySolutionsPaymentMethod,
   currency: "THB" | "USD"
-): "promptpay" | "full" {
+): "promptpay" | "full" | "alipay" {
+  if (paymentMethod === "alipay") return "alipay";
   if (currency === "USD") return "full";
-
   if (paymentMethod === "qr") return "promptpay";
   return "full";
 }

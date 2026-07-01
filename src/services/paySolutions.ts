@@ -1,6 +1,6 @@
 import axios from "axios";
 
-export type PaySolutionsChannel = "promptpay" | "full";
+export type PaySolutionsChannel = "promptpay" | "full" | "alipay";
 
 export interface CreateFormSubmitParams {
   amount: number;
@@ -258,13 +258,21 @@ export function normalizePaySolutionsChannel(
     return "promptpay";
   }
 
+  if (
+    cardTypeNorm === "ALIPAY" ||
+    cardTypeNorm === "AP" ||
+    cardTypeNorm === "A"
+  ) {
+    return "alipay";
+  }
+
   if (cardTypeNorm) {
     return "card";
   }
 
   if (fallbackChannel) {
     const normalizedFallback = fallbackChannel.trim().toLowerCase();
-    if (["promptpay", "card", "full"].includes(normalizedFallback)) {
+    if (["promptpay", "card", "full", "alipay"].includes(normalizedFallback)) {
       if (normalizedFallback === "full") {
         return "card";
       }

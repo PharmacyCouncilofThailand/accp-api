@@ -47,6 +47,7 @@ import {
   resolvePaySolutionsChannel,
   resolvePaySolutionsFeeMethod,
 } from "../../utils/paySolutionsFee.js";
+import { convertUsdDiscountToThb, convertUsdToThb, isInternationalRole } from "../../utils/alipayCharge.js";
 import { generateReceiptToken, verifyReceiptToken } from "../../utils/receiptToken.js";
 import { generateReceiptPdf } from "../../services/receiptPdf.js";
 import { sendPaymentReceiptEmail } from "../../services/emailService.js";
@@ -429,6 +430,44 @@ async function resolveTicketId(
     matched.sort((a, b) => (a.displayOrder || 0) - (b.displayOrder || 0));
     return { id: matched[0].id, price: matched[0].price, eventId: matched[0].eventId };
   }
+}
+
+interface AlipayChargeContext {
+  thbSubtotal: number;
+  thbDiscount: number;
+  thbNet: number;
+  feeBreakdown: ReturnType<typeof calculatePaySolutionsFeeExact>;
+  chargeAmount: number;
+}
+
+function buildAlipayChargeContext(
+  usdSubtotal: number,
+  usdDiscount: number
+): AlipayChargeContext {
+  const thbSubtotal = convertUsdToThb(usdSubtotal);
+  const thbDiscount = convertUsdDiscountToThb(usdDiscount);
+  const thbNet = Math.round((thbSubtotal - thbDiscount) * 100) / 100;
+  const feeBreakdown =
+    thbNet > 0
+      ? calculatePaySolutionsFeeExact(thbNet, "alipay")
+      : {
+          net: 0,
+          fee: 0,
+          total: 0,
+          method: "alipay" as const,
+          processingFee: 0,
+          processingVat: 0,
+          rate: 0.025,
+          vatRate: 0.07,
+        };
+
+  return {
+    thbSubtotal,
+    thbDiscount,
+    thbNet,
+    feeBreakdown,
+    chargeAmount: feeBreakdown.total,
+  };
 }
 
 interface PurchaseSnapshot {
@@ -1532,7 +1571,25 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
 
       const { eventId, packageId, addOnIds, currency, paymentMethod, promoCode } = parsed.data;
       const userId = request.user.id;
+      const userRole = String(request.user.role || "");
       const isAddonOnly = !packageId || packageId === "";
+
+      if (paymentMethod === "alipay") {
+        if (!isInternationalRole(userRole)) {
+          return reply.status(403).send({
+            success: false,
+            code: "ALIPAY_NOT_ALLOWED",
+            error: "Alipay is only available for international delegates",
+          });
+        }
+        if (currency !== "USD") {
+          return reply.status(400).send({
+            success: false,
+            code: "ALIPAY_USD_ONLY",
+            error: "Alipay requires USD ticket pricing",
+          });
+        }
+      }
 
       try {
         // Resolve primary ticket
@@ -1584,10 +1641,27 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         }
 
         const netAmount = Math.round((subtotal - discountAmount) * 100) / 100;
-        const feeMethod = resolvePaySolutionsFeeMethod(paymentMethod, currency);
-        const feeBreakdown = netAmount > 0
-          ? calculatePaySolutionsFeeExact(netAmount, feeMethod)
-          : { fee: 0, total: 0 };
+
+        let feeMethod = resolvePaySolutionsFeeMethod(paymentMethod, currency);
+        let feeBreakdown =
+          netAmount > 0
+            ? calculatePaySolutionsFeeExact(netAmount, feeMethod)
+            : { fee: 0, total: 0, processingFee: 0, processingVat: 0 };
+
+        let chargeCurrency: "THB" | "USD" = currency;
+        let chargeTotal = feeBreakdown.total;
+        let chargeFee = feeBreakdown.fee;
+        let chargeNet = netAmount;
+
+        if (paymentMethod === "alipay") {
+          const alipayCharge = buildAlipayChargeContext(subtotal, discountAmount);
+          feeMethod = "alipay";
+          feeBreakdown = alipayCharge.feeBreakdown;
+          chargeCurrency = "THB";
+          chargeTotal = alipayCharge.chargeAmount;
+          chargeFee = alipayCharge.feeBreakdown.fee;
+          chargeNet = alipayCharge.thbNet;
+        }
 
         return reply.send({
           success: true,
@@ -1597,9 +1671,11 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             discountType,
             discountValue,
             netAmount,
-            fee: feeBreakdown.fee,
-            total: feeBreakdown.total,
+            fee: chargeFee,
+            total: chargeTotal,
             currency,
+            chargeCurrency,
+            chargeNet,
             feeMethod,
             promoValid,
             promoError,
@@ -1656,7 +1732,26 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         taxPostalCode,
       } = parsed.data;
       const userId = request.user.id;
+      const userRole = String(request.user.role || "");
       const isAddonOnly = !packageId || packageId === "";
+
+      if (paymentMethod === "alipay") {
+        if (!isInternationalRole(userRole)) {
+          return reply.status(403).send({
+            success: false,
+            code: "ALIPAY_NOT_ALLOWED",
+            error: "Alipay is only available for international delegates",
+          });
+        }
+        if (currency !== "USD") {
+          return reply.status(400).send({
+            success: false,
+            code: "ALIPAY_USD_ONLY",
+            error: "Alipay requires USD ticket pricing",
+          });
+        }
+      }
+
       const taxInvoice = buildTaxInvoiceInfo({
         needTaxInvoice,
         taxName,
@@ -1942,11 +2037,23 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         }
 
         // 6. Calculate Pay Solutions fee (pass-through to buyer)
-        const feeMethod = resolvePaySolutionsFeeMethod(paymentMethod, currency);
-        const feeBreakdown = totalAmount > 0
-          ? calculatePaySolutionsFeeExact(totalAmount, feeMethod)
-          : { fee: 0, total: 0, processingFee: 0, processingVat: 0 };
-        const chargeAmount = feeBreakdown.total;
+        const isAlipayPayment = paymentMethod === "alipay";
+        let feeMethod = resolvePaySolutionsFeeMethod(paymentMethod, currency);
+        let feeBreakdown =
+          totalAmount > 0
+            ? calculatePaySolutionsFeeExact(totalAmount, feeMethod)
+            : { fee: 0, total: 0, processingFee: 0, processingVat: 0 };
+        let chargeAmount = feeBreakdown.total;
+        let chargeCurrency: "THB" | "USD" = currency;
+        let alipayCharge: AlipayChargeContext | null = null;
+
+        if (isAlipayPayment) {
+          alipayCharge = buildAlipayChargeContext(subtotalBeforeDiscount, discountAmount);
+          feeMethod = "alipay";
+          feeBreakdown = alipayCharge.feeBreakdown;
+          chargeAmount = alipayCharge.chargeAmount;
+          chargeCurrency = "THB";
+        }
 
         // 7. Create Order record (with orderNumber + promo info)
         const orderNumber = generateOrderNumber();
@@ -2149,7 +2256,11 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           descLines.push(`Discount ${currency === "THB" ? "THB" : "USD"} ${discountAmount.toLocaleString()}`);
         }
         if (feeBreakdown.fee > 0) {
-          descLines.push(`Fee ${currency === "THB" ? "THB" : "USD"} ${feeBreakdown.fee.toLocaleString()}`);
+          const feeCurrencyLabel = isAlipayPayment ? "THB" : currency === "THB" ? "THB" : "USD";
+          descLines.push(`Fee ${feeCurrencyLabel} ${feeBreakdown.fee.toLocaleString()}`);
+        }
+        if (isAlipayPayment && alipayCharge) {
+          descLines.push(`Alipay charge THB ${chargeAmount.toLocaleString()}`);
         }
 
         const [buyer] = await db
@@ -2178,6 +2289,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
 
         const sourceApp = String(request.headers["x-source-app"] || "").toLowerCase();
         const shouldUseKtbGateway =
+          !isAlipayPayment &&
           sourceApp === "conference-web" &&
           currency === "THB" &&
           isKtbFastpayConfigured();
@@ -2260,6 +2372,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         }
 
         const paySolutionsChannel = resolvePaySolutionsChannel(paymentMethod, currency);
+        const paySolutionsFormCurrency: "THB" | "USD" = isAlipayPayment ? "THB" : currency;
         const paySolutionsRefno = await generatePaySolutionsRefno();
         let formSubmitPayload: ReturnType<typeof createFormSubmitPayload> | null = null;
 
@@ -2271,7 +2384,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             userEmail: buyer.email,
             customerName: customerFullName || undefined,
             channel: paySolutionsChannel,
-            currency,
+            currency: paySolutionsFormCurrency,
             lang: paySolutionsLang,
           });
 
@@ -2306,6 +2419,18 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             workshopSessionId: workshopSessionId || null,
             processingFee: feeBreakdown.processingFee,
             processingVat: feeBreakdown.processingVat,
+            chargeCurrency,
+            ticketCurrency: currency,
+            netAmountUsd: totalAmount,
+            ...(alipayCharge
+              ? {
+                  alipayCharge: {
+                    thbSubtotal: alipayCharge.thbSubtotal,
+                    thbDiscount: alipayCharge.thbDiscount,
+                    thbNet: alipayCharge.thbNet,
+                  },
+                }
+              : {}),
             formSubmitActionUrl: formSubmitPayload.actionUrl,
             formSubmitFields: formSubmitPayload.fields,
           },
@@ -2336,6 +2461,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             fee: feeBreakdown.fee,
             total: chargeAmount,
             currency,
+            chargeCurrency,
+            chargeNet: isAlipayPayment && alipayCharge ? alipayCharge.thbNet : totalAmount,
             feeMethod,
             paymentChannel: paySolutionsChannel,
           },
