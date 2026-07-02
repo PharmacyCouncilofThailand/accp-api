@@ -509,6 +509,26 @@ export const checkIns = pgTable("check_ins", {
   scannedBy: integer("scanned_by").references(() => users.id),
 });
 
+/** Every scan attempt (first check-in + duplicate re-scans) for attendance auditing */
+export const checkInScanLogs = pgTable("check_in_scan_logs", {
+  id: serial("id").primaryKey(),
+  registrationSessionId: integer("registration_session_id")
+    .notNull()
+    .references(() => registrationSessions.id, { onDelete: "cascade" }),
+  registrationId: integer("registration_id")
+    .notNull()
+    .references(() => registrations.id, { onDelete: "cascade" }),
+  eventId: integer("event_id")
+    .notNull()
+    .references(() => events.id),
+  sessionId: integer("session_id")
+    .notNull()
+    .references(() => sessions.id),
+  isDuplicate: boolean("is_duplicate").notNull().default(false),
+  scannedAt: timestamp("scanned_at").notNull().defaultNow(),
+  scannedBy: integer("scanned_by").references(() => backofficeUsers.id),
+});
+
 // --------------------------------------------------------------------------
 // 7. ABSTRACTS & SPEAKERS
 // --------------------------------------------------------------------------

@@ -11,6 +11,14 @@ import {
 import { checkinListSchema, createCheckinSchema, checkinStatsSchema, undoCheckinSchema } from "../../schemas/checkins.schema.js";
 import { eq, desc, ilike, and, or, count, isNotNull, isNull, sql } from "drizzle-orm";
 import { getFullName } from "../../utils/name.js";
+import {
+    completeCheckIn,
+    getDuplicateCountForEvent,
+    getDuplicateCountForSession,
+    logCheckInScan,
+    registrationPayload,
+    respondAlreadyCheckedIn,
+} from "../../services/checkInScanLog.js";
 
 export default async function (fastify: FastifyInstance) {
     // List Check-ins (reads from registration_sessions WHERE checkedInAt IS NOT NULL)
@@ -164,11 +172,20 @@ export default async function (fastify: FastifyInstance) {
                 }));
             }
 
+            const checkedInNum = Number(checkedIn);
+            const totalNum = Number(total);
+
+            let duplicateScans = 0;
+            if (eventId) {
+                duplicateScans = await getDuplicateCountForEvent(eventId);
+            }
+
             return reply.send({
-                total,
-                checkedIn,
-                remaining: total - checkedIn,
-                percentage: total > 0 ? Math.round((checkedIn / total) * 100) : 0,
+                total: totalNum,
+                checkedIn: checkedInNum,
+                remaining: totalNum - checkedInNum,
+                percentage: totalNum > 0 ? Math.round((checkedInNum / totalNum) * 100) : 0,
+                duplicateScans,
                 ...(sessionBreakdown.length > 0 && { sessionBreakdown }),
             });
         } catch (error) {
@@ -240,18 +257,13 @@ export default async function (fastify: FastifyInstance) {
                 }
 
                 if (regSession.checkedInAt) {
-                    return reply.status(409).send({
-                        error: "เช็คอินแล้ว",
-                        code: "ALREADY_CHECKED_IN",
-                        checkedInAt: regSession.checkedInAt,
-                        sessionName: (regSession as any).session?.sessionName,
-                        registration: {
-                            regCode: registration.regCode,
-                            firstName: registration.firstName,
-                            middleName: (registration as any).middleName,
-                            lastName: registration.lastName,
-                        },
-                    });
+                    return respondAlreadyCheckedIn(
+                        reply,
+                        regSession as any,
+                        registration as any,
+                        staffUserId,
+                        "เช็คอินแล้ว"
+                    );
                 }
 
                 // ─── Session time window validation ───
@@ -290,10 +302,7 @@ export default async function (fastify: FastifyInstance) {
                     }
                 }
 
-                await db
-                    .update(registrationSessions)
-                    .set({ checkedInAt: new Date(), checkedInBy: staffUserId })
-                    .where(eq(registrationSessions.id, regSession.id));
+                await completeCheckIn(regSession as any, registration as any, staffUserId);
 
                 return reply.send({
                     success: true,
@@ -304,12 +313,7 @@ export default async function (fastify: FastifyInstance) {
                     },
                     registration: {
                         id: registration.id,
-                        regCode: registration.regCode,
-                        firstName: registration.firstName,
-                        middleName: (registration as any).middleName,
-                        lastName: registration.lastName,
-                        ticketName: (registration as any).ticketType?.name,
-                        eventName: (registration as any).event?.eventName,
+                        ...registrationPayload(registration as any),
                     },
                 });
             }
@@ -318,9 +322,21 @@ export default async function (fastify: FastifyInstance) {
             if (checkInAll) {
                 const unchecked = regSessions.filter((rs: any) => !rs.checkedInAt);
                 if (unchecked.length === 0) {
+                    const firstChecked = regSessions.find((rs: any) => rs.checkedInAt);
+                    if (firstChecked) {
+                        await logCheckInScan(firstChecked as any, registration as any, staffUserId, true);
+                        const duplicateCount = await getDuplicateCountForSession(firstChecked.id);
+                        return reply.status(409).send({
+                            error: "All sessions already checked in",
+                            code: "ALREADY_CHECKED_IN",
+                            duplicateCount,
+                            registration: registrationPayload(registration as any),
+                        });
+                    }
                     return reply.status(409).send({
                         error: "All sessions already checked in",
                         code: "ALREADY_CHECKED_IN",
+                        duplicateCount: 0,
                     });
                 }
 
@@ -362,10 +378,7 @@ export default async function (fastify: FastifyInstance) {
 
                 // Check-in only valid sessions
                 for (const rs of validSessions) {
-                    await db
-                        .update(registrationSessions)
-                        .set({ checkedInAt: new Date(), checkedInBy: staffUserId })
-                        .where(eq(registrationSessions.id, rs.id));
+                    await completeCheckIn(rs as any, registration as any, staffUserId);
                 }
 
                 const response = {
@@ -405,12 +418,13 @@ export default async function (fastify: FastifyInstance) {
                 }
 
                 if (regSession.checkedInAt) {
-                    return reply.status(409).send({
-                        error: "Already checked in for this session",
-                        code: "ALREADY_CHECKED_IN",
-                        checkedInAt: regSession.checkedInAt,
-                        sessionName: (regSession as any).session?.sessionName,
-                    });
+                    return respondAlreadyCheckedIn(
+                        reply,
+                        regSession as any,
+                        registration as any,
+                        staffUserId,
+                        "Already checked in for this session"
+                    );
                 }
 
                 // ─── Session time window validation ───
@@ -437,10 +451,7 @@ export default async function (fastify: FastifyInstance) {
                     }
                 }
 
-                await db
-                    .update(registrationSessions)
-                    .set({ checkedInAt: new Date(), checkedInBy: staffUserId })
-                    .where(eq(registrationSessions.id, regSession.id));
+                await completeCheckIn(regSession as any, registration as any, staffUserId);
 
                 return reply.send({
                     success: true,
@@ -451,12 +462,7 @@ export default async function (fastify: FastifyInstance) {
                     },
                     registration: {
                         id: registration.id,
-                        regCode: registration.regCode,
-                        firstName: registration.firstName,
-                        middleName: (registration as any).middleName,
-                        lastName: registration.lastName,
-                        ticketName: (registration as any).ticketType?.name,
-                        eventName: (registration as any).event?.eventName,
+                        ...registrationPayload(registration as any),
                     },
                 });
             }
