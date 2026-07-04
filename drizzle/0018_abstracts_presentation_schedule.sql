@@ -1,0 +1,9 @@
+ALTER TABLE "abstracts" ADD COLUMN IF NOT EXISTS "presentation_date" date;
+ALTER TABLE "abstracts" ADD COLUMN IF NOT EXISTS "presentation_room" varchar(255);
+ALTER TABLE "abstracts" ADD COLUMN IF NOT EXISTS "presentation_start_time" varchar(10);
+ALTER TABLE "abstracts" ADD COLUMN IF NOT EXISTS "presentation_end_time" varchar(10);
+ALTER TABLE "abstracts" ADD COLUMN IF NOT EXISTS "poster_board_number" varchar(10);
+ALTER TABLE "abstracts" ADD COLUMN IF NOT EXISTS "poster_installation_start" varchar(10);
+ALTER TABLE "abstracts" ADD COLUMN IF NOT EXISTS "poster_installation_end" varchar(10);
+ALTER TABLE "abstracts" ADD COLUMN IF NOT EXISTS "poster_removal_start" varchar(10);
+ALTER TABLE "abstracts" ADD COLUMN IF NOT EXISTS "poster_removal_end" varchar(10);

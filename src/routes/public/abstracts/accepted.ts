@@ -2,10 +2,12 @@ import { FastifyInstance } from "fastify";
 import { asc, and, eq, ilike, or, sql } from "drizzle-orm";
 import { db } from "../../../database/index.js";
 import { abstracts, users } from "../../../database/schema.js";
+import { buildAbstractScheduleResponse, hasScheduledLocation } from "../../../utils/abstractSchedule.js";
 
 type AcceptedAbstractQuery = {
   search?: string;
   presentationType?: "oral" | "poster";
+  scheduledOnly?: string;
 };
 
 const toPresenterName = (author: {
@@ -50,6 +52,15 @@ export default async function acceptedAbstractsRoutes(fastify: FastifyInstance) 
           category: abstracts.category,
           presentationType: abstracts.presentationType,
           createdAt: abstracts.createdAt,
+          presentationDate: abstracts.presentationDate,
+          presentationRoom: abstracts.presentationRoom,
+          presentationStartTime: abstracts.presentationStartTime,
+          presentationEndTime: abstracts.presentationEndTime,
+          posterBoardNumber: abstracts.posterBoardNumber,
+          posterInstallationStart: abstracts.posterInstallationStart,
+          posterInstallationEnd: abstracts.posterInstallationEnd,
+          posterRemovalStart: abstracts.posterRemovalStart,
+          posterRemovalEnd: abstracts.posterRemovalEnd,
           author: {
             firstName: users.firstName,
             middleName: users.middleName,
@@ -76,15 +87,23 @@ export default async function acceptedAbstractsRoutes(fastify: FastifyInstance) 
         presenterName: toPresenterName(item.author),
         institution: item.author?.institution || null,
         country: item.author?.country || null,
+        schedule: buildAbstractScheduleResponse(item),
       }));
+
+      const scheduledOnly = query.scheduledOnly === "true" || query.scheduledOnly === "1";
+      const visibleItems = scheduledOnly
+        ? items.filter((item) =>
+            hasScheduledLocation(item.presentationType, item.schedule),
+          )
+        : items;
 
       return reply.send({
         success: true,
-        abstracts: items,
-        total: items.length,
+        abstracts: visibleItems,
+        total: visibleItems.length,
         counts: {
-          oral: items.filter((item) => item.presentationType === "oral").length,
-          poster: items.filter((item) => item.presentationType === "poster").length,
+          oral: visibleItems.filter((item) => item.presentationType === "oral").length,
+          poster: visibleItems.filter((item) => item.presentationType === "poster").length,
         },
       });
     } catch (error) {
