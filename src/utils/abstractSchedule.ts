@@ -1,4 +1,6 @@
 import type { abstracts } from "../database/schema.js";
+import { and, eq, isNotNull, or, sql } from "drizzle-orm";
+import { abstracts as abstractsTable } from "../database/schema.js";
 
 type AbstractScheduleRow = Pick<
   typeof abstracts.$inferSelect,
@@ -120,4 +122,72 @@ export const hasScheduledLocation = (
     return Boolean(schedule.room?.trim());
   }
   return Boolean(schedule.boardNumber?.trim());
+};
+
+export const scheduledAbstractLocationCondition = () =>
+  and(
+    eq(abstractsTable.status, "accepted"),
+    or(
+      and(
+        eq(abstractsTable.presentationType, "oral"),
+        isNotNull(abstractsTable.presentationRoom),
+        sql`trim(${abstractsTable.presentationRoom}) <> ''`,
+      ),
+      and(
+        eq(abstractsTable.presentationType, "poster"),
+        isNotNull(abstractsTable.posterBoardNumber),
+        sql`trim(${abstractsTable.posterBoardNumber}) <> ''`,
+      ),
+    ),
+  );
+
+export const formatScheduleDisplayDate = (
+  value: string | Date | null | undefined,
+): string | null => {
+  const iso = formatScheduleDate(value);
+  if (!iso) return null;
+  const date = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "Asia/Bangkok",
+  });
+};
+
+export const buildScheduleDetailLines = (
+  row: AbstractScheduleRow,
+): string[] => {
+  const schedule = buildAbstractScheduleResponse(row);
+  if (!schedule) return [];
+
+  const lines: string[] = [];
+  if (row.presentationType === "oral") {
+    if (schedule.room) lines.push(`Room: ${schedule.room}`);
+    const date = formatScheduleDisplayDate(schedule.date);
+    if (date) lines.push(`Date: ${date}`);
+    if (schedule.presentation) {
+      lines.push(`Time: ${schedule.presentation.start} – ${schedule.presentation.end}`);
+    }
+    return lines;
+  }
+
+  if (schedule.boardNumber) lines.push(`Poster Board: #${schedule.boardNumber}`);
+  const date = formatScheduleDisplayDate(schedule.date);
+  if (date) lines.push(`Presentation Date: ${date}`);
+  if (schedule.presentation) {
+    lines.push(
+      `Presentation Time: ${schedule.presentation.start} – ${schedule.presentation.end}`,
+    );
+  }
+  if (schedule.installation) {
+    lines.push(
+      `Installation: ${schedule.installation.start} – ${schedule.installation.end}`,
+    );
+  }
+  if (schedule.removal) {
+    lines.push(`Removal: ${schedule.removal.start} – ${schedule.removal.end}`);
+  }
+  return lines;
 };

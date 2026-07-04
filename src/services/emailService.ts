@@ -1432,6 +1432,102 @@ export async function sendAcademicAcceptanceEmail(
   }
 }
 
+// ============================================
+// PRESENTATION SCHEDULE NOTIFICATION (manual send)
+// Notifies accepted presenters of their room / poster board assignment.
+// ============================================
+
+export function buildPresentationScheduleNotificationEmailContent(
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  trackingId: string,
+  abstractTitle: string,
+  presentationType: "oral" | "poster",
+  scheduleLines: string[],
+): { subject: string; html: string } {
+  const websiteUrl = getWebsiteUrl();
+  const contactEmail = getContactEmail();
+  const programUrl = `${websiteUrl.replace(/\/$/, "")}/program-oral-poster`;
+  const typeLabel = presentationType === "oral" ? "Oral Presentation" : "Poster Presentation";
+  const scheduleBlock =
+    scheduleLines.length > 0
+      ? `\nYour Schedule Details:\n${scheduleLines.map((line) => `  - ${line}`).join("\n")}\n`
+      : "\n";
+  const attachmentNote =
+    presentationType === "oral"
+      ? "Please review the attached Oral Presentation Schedule (PDF) for the complete session timetable and venue information."
+      : "Please review the attached Poster Presentation Schedule (PDF) for poster board assignments, installation times, and session details.";
+
+  const plainText = `Dear ${getFullName(firstName, middleName, lastName)},
+
+Your presentation schedule for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY is now available. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.
+
+Tracking ID: ${trackingId}
+Abstract Title: ${abstractTitle}
+Presentation Type: ${typeLabel}
+${scheduleBlock}
+${attachmentNote}
+
+You may also view your assignment online at ${programUrl}
+
+All presenters must be registered for the conference in order to present. For registration information, please visit ${websiteUrl}
+
+If you have any questions regarding your presentation schedule, please contact ${contactEmail}
+
+We look forward to your presentation.
+
+Sincerely,
+25th ACCP committee
+Bangkok Thailand`;
+
+  let html = buildEmailHtmlFromText(plainText);
+  html = html.replace(
+    programUrl,
+    `<a href="${programUrl}" style="color:#1a73e8;font-weight:bold;text-decoration:underline;">${programUrl}</a>`,
+  );
+
+  return {
+    subject: `Your ${typeLabel} Schedule - ${trackingId} | 25th ACCP 2026`,
+    html,
+  };
+}
+
+export async function sendPresentationScheduleNotificationEmail(
+  email: string,
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+  trackingId: string,
+  abstractTitle: string,
+  presentationType: "oral" | "poster",
+  scheduleLines: string[],
+  attachment?: { pdf: Buffer; fileName: string },
+): Promise<void> {
+  const { subject, html } = buildPresentationScheduleNotificationEmailContent(
+    firstName,
+    middleName,
+    lastName,
+    trackingId,
+    abstractTitle,
+    presentationType,
+    scheduleLines,
+  );
+  const attachments: EmailAttachment[] | undefined = attachment
+    ? [{ content: attachment.pdf, fileName: attachment.fileName }]
+    : undefined;
+
+  try {
+    await sendNipaMailHtml(email, subject, html, attachments);
+    console.log(
+      `Presentation schedule email sent to ${email}${attachment ? " (with PDF)" : ""}`,
+    );
+  } catch (error) {
+    console.error("Error sending presentation schedule email:", error);
+    throw error;
+  }
+}
+
 /**
  * Send contact form email to conference organizers
  * Email will be sent to accpbangkok2026@gmail.com with Reply-To set to user's email

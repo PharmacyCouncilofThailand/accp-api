@@ -60,6 +60,7 @@ RUN npm install --legacy-peer-deps --omit=dev
 # Copy font files for PDF receipt generation (PDFKit)
 COPY --from=builder /app/public/Font ./public/Font
 COPY --from=builder /app/public/email ./public/email
+COPY --from=builder /app/public/documents ./public/documents
 
 # Create public directory for uploads (before switching to non-root user)
 RUN mkdir -p /app/public/uploads

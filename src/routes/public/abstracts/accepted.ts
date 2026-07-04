@@ -73,7 +73,7 @@ export default async function acceptedAbstractsRoutes(fastify: FastifyInstance) 
         .leftJoin(users, eq(abstracts.userId, users.id))
         .where(and(...conditions))
         .orderBy(
-          asc(abstracts.presentationType),
+          sql`CASE WHEN ${abstracts.presentationType} = 'oral' THEN 0 ELSE 1 END`,
           asc(abstracts.trackingId),
           asc(abstracts.createdAt),
         );

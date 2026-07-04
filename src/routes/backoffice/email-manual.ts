@@ -25,6 +25,7 @@ import {
   sendManualRegistrationEmail,
   sendApprovalRequestEmail,
   sendAcademicAcceptanceEmail,
+  sendPresentationScheduleNotificationEmail,
   buildSignupNotificationEmailContent,
   buildPendingApprovalEmailContent,
   buildPaymentReceiptEmailContent,
@@ -35,11 +36,18 @@ import {
   buildAbstractRejectedEmailContent,
   buildApprovalRequestEmailContent,
   buildAcademicAcceptanceEmailContent,
+  buildPresentationScheduleNotificationEmailContent,
   buildEmailHtmlFromText,
 } from "../../services/emailService.js";
 import { generateReceiptToken } from "../../utils/receiptToken.js";
 import { buildChargeNote, resolveChargeDisplay } from "../../utils/alipayCharge.js";
 import { getFullName } from "../../utils/name.js";
+import {
+  buildAbstractScheduleResponse,
+  buildScheduleDetailLines,
+  scheduledAbstractLocationCondition,
+} from "../../utils/abstractSchedule.js";
+import { loadPresentationSchedulePdf, getPresentationSchedulePdfPreviewUrl } from "../../services/presentationSchedulePdf.js";
 import { buildInvitationLetterPdfForOrder } from "../../services/invitationLetterBuilder.js";
 import {
   renderAbstractAcceptPdf,
@@ -118,6 +126,12 @@ const TEMPLATE_CONFIG = {
     recipientType: "abstract" as const,
     requiresComment: false,
     description: "Registration reminder for accepted oral/poster presenters without conference registration or paid ticket",
+  },
+  "presentation-schedule-notification": {
+    label: "Presentation Schedule Notification",
+    recipientType: "abstract" as const,
+    requiresComment: false,
+    description: "Notify accepted presenters of their room or poster board assignment (with schedule PDF attached)",
   },
 } as const;
 
@@ -235,6 +249,50 @@ function buildManualRegistrationEmailContent(
   );
 
   return { subject: `Registration Confirmed - ${regCode} | ${eventName}`, html };
+}
+
+async function getAbstractScheduleContext(abstractId: number) {
+  const [ab] = await db
+    .select({
+      id: abstracts.id,
+      trackingId: abstracts.trackingId,
+      title: abstracts.title,
+      userId: abstracts.userId,
+      status: abstracts.status,
+      presentationType: abstracts.presentationType,
+      presentationDate: abstracts.presentationDate,
+      presentationRoom: abstracts.presentationRoom,
+      presentationStartTime: abstracts.presentationStartTime,
+      presentationEndTime: abstracts.presentationEndTime,
+      posterBoardNumber: abstracts.posterBoardNumber,
+      posterInstallationStart: abstracts.posterInstallationStart,
+      posterInstallationEnd: abstracts.posterInstallationEnd,
+      posterRemovalStart: abstracts.posterRemovalStart,
+      posterRemovalEnd: abstracts.posterRemovalEnd,
+    })
+    .from(abstracts)
+    .where(eq(abstracts.id, abstractId))
+    .limit(1);
+
+  if (!ab || !ab.userId) return null;
+
+  const [author] = await db
+    .select({
+      email: users.email,
+      firstName: users.firstName,
+      middleName: users.middleName,
+      lastName: users.lastName,
+    })
+    .from(users)
+    .where(eq(users.id, ab.userId))
+    .limit(1);
+
+  if (!author) return null;
+
+  const presentationType = ab.presentationType === "oral" ? "oral" : "poster";
+  const scheduleLines = buildScheduleDetailLines(ab);
+
+  return { ab, author, presentationType, scheduleLines };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -474,6 +532,8 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           statusCond = eq(abstracts.status, "accepted" as any);
         } else if (template === "abstract-accepted-no-registration") {
           statusCond = acceptedAbstractWithoutRegistrationCond();
+        } else if (template === "presentation-schedule-notification") {
+          statusCond = scheduledAbstractLocationCondition();
         }
         // abstract-submission: no status filter — all abstracts
 
@@ -484,12 +544,20 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
                 asc(abstracts.trackingId),
                 asc(abstracts.id),
               ]
-            : [desc(abstracts.updatedAt)];
+            : template === "presentation-schedule-notification"
+              ? [
+                  sql`CASE WHEN ${abstracts.presentationType} = 'oral' THEN 0 ELSE 1 END`,
+                  asc(abstracts.trackingId),
+                  asc(abstracts.id),
+                ]
+              : [desc(abstracts.updatedAt)];
 
         const rows = await db
           .select({
             id: abstracts.id, trackingId: abstracts.trackingId,
             title: abstracts.title, status: abstracts.status, presentationType: abstracts.presentationType,
+            presentationRoom: abstracts.presentationRoom,
+            posterBoardNumber: abstracts.posterBoardNumber,
             firstName: users.firstName, middleName: users.middleName, lastName: users.lastName, email: users.email,
           })
           .from(abstracts)
@@ -508,7 +576,12 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           label: a.trackingId ?? `#${a.id}`,
           email: a.email ?? "",
           detail: a.title.length > 70 ? a.title.slice(0, 70) + "…" : a.title,
-          tag: `${a.status as string}${a.presentationType ? ` · ${a.presentationType as string}` : ""}`,
+          tag:
+            template === "presentation-schedule-notification"
+              ? a.presentationType === "oral"
+                ? `oral · ${a.presentationRoom ?? "—"}`
+                : `poster · #${a.posterBoardNumber ?? "—"}`
+              : `${a.status as string}${a.presentationType ? ` · ${a.presentationType as string}` : ""}`,
         }));
 
       } else if (cfg.recipientType === "registration") {
@@ -754,6 +827,47 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           author.firstName, author.middleName, author.lastName, ab.title, presentationType,
         );
         return reply.send({ success: true, to: author.email, ...content });
+
+      } else if (template === "presentation-schedule-notification") {
+        const ctx = await getAbstractScheduleContext(numId);
+        if (!ctx) return reply.status(404).send({ success: false, error: "Abstract or author not found" });
+        if (ctx.ab.status !== "accepted") {
+          return reply.status(400).send({ success: false, error: "Schedule notification is only for accepted abstracts" });
+        }
+
+        const schedule = buildAbstractScheduleResponse(ctx.ab);
+        const hasLocation =
+          ctx.presentationType === "oral"
+            ? Boolean(schedule?.room?.trim())
+            : Boolean(schedule?.boardNumber?.trim());
+        if (!hasLocation) {
+          return reply.status(400).send({
+            success: false,
+            error: "Abstract has no assigned room or poster board number",
+          });
+        }
+
+        const content = buildPresentationScheduleNotificationEmailContent(
+          ctx.author.firstName,
+          ctx.author.middleName,
+          ctx.author.lastName,
+          ctx.ab.trackingId ?? `#${ctx.ab.id}`,
+          ctx.ab.title,
+          ctx.presentationType,
+          ctx.scheduleLines,
+        );
+        const attachment = loadPresentationSchedulePdf(ctx.presentationType);
+        return reply.send({
+          success: true,
+          to: ctx.author.email,
+          ...content,
+          attachment: attachment
+            ? {
+                fileName: attachment.fileName,
+                downloadUrl: `${getPublicApiBaseUrl()}${getPresentationSchedulePdfPreviewUrl(ctx.presentationType)}`,
+              }
+            : undefined,
+        });
 
       } else if (template === "manual-registration") {
         const [reg] = await db
@@ -1093,6 +1207,67 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               }
               await sendAcademicAcceptanceEmail(
                 author.email, author.firstName, author.middleName, author.lastName, ab.presentationType, attachment,
+              );
+            } else if (template === "presentation-schedule-notification") {
+              if (ab.status !== "accepted") {
+                results.push({
+                  id,
+                  email: author.email,
+                  name: fullName,
+                  type: template,
+                  status: "skipped",
+                  reason: `Abstract status is "${ab.status}" (must be accepted)`,
+                });
+                continue;
+              }
+
+              const ctx = await getAbstractScheduleContext(id);
+              if (!ctx) {
+                results.push({
+                  id,
+                  email: author.email,
+                  name: fullName,
+                  type: template,
+                  status: "skipped",
+                  reason: "Could not load schedule details",
+                });
+                continue;
+              }
+
+              const schedule = buildAbstractScheduleResponse(ctx.ab);
+              const hasLocation =
+                ctx.presentationType === "oral"
+                  ? Boolean(schedule?.room?.trim())
+                  : Boolean(schedule?.boardNumber?.trim());
+              if (!hasLocation) {
+                results.push({
+                  id,
+                  email: author.email,
+                  name: fullName,
+                  type: template,
+                  status: "skipped",
+                  reason: "No assigned room or poster board number",
+                });
+                continue;
+              }
+
+              const attachment = loadPresentationSchedulePdf(ctx.presentationType);
+              if (!attachment) {
+                fastify.log.warn(
+                  `email-manual: schedule PDF not found for ${ctx.presentationType}; sending email without attachment`,
+                );
+              }
+
+              await sendPresentationScheduleNotificationEmail(
+                author.email,
+                author.firstName,
+                author.middleName,
+                author.lastName,
+                ctx.ab.trackingId ?? `#${ctx.ab.id}`,
+                ctx.ab.title,
+                ctx.presentationType,
+                ctx.scheduleLines,
+                attachment ?? undefined,
               );
             }
             results.push({ id, email: author.email, name: fullName, type: template, status: "sent" });
