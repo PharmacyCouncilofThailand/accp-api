@@ -37,7 +37,7 @@ export const createSessionSchema = z.object({
     sessionType: z.enum(["workshop", "gala_dinner", "lecture", "ceremony", "break", "other"]).optional().default("other"),
     isMainSession: z.boolean().optional().default(false),
     description: z.string().optional(),
-    room: z.string().max(100).optional(),
+    room: z.string().max(255).optional(),
     startTime: z.string().datetime(),
     endTime: z.string().datetime(),
     speakerIds: z.array(z.number()).optional(), // New way: link to speakers table

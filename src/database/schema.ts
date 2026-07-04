@@ -217,7 +217,7 @@ export const sessions = pgTable("sessions", {
   sessionType: sessionTypeEnum("session_type").default("other"),
   isMainSession: boolean("is_main_session").notNull().default(false),
   description: text("description"),
-  room: varchar("room", { length: 100 }),
+  room: varchar("room", { length: 255 }),
   startTime: timestamp("start_time").notNull(),
   endTime: timestamp("end_time").notNull(),
   maxCapacity: integer("max_capacity").default(100),
