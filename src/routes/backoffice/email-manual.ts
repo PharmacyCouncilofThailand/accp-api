@@ -38,6 +38,7 @@ import {
   buildEmailHtmlFromText,
 } from "../../services/emailService.js";
 import { generateReceiptToken } from "../../utils/receiptToken.js";
+import { buildChargeNote, resolveChargeDisplay } from "../../utils/alipayCharge.js";
 import { getFullName } from "../../utils/name.js";
 import { buildInvitationLetterPdfForOrder } from "../../services/invitationLetterBuilder.js";
 import {
@@ -578,7 +579,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           .from(orderItems).innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
           .where(eq(orderItems.orderId, numId));
         const [payment] = await db
-          .select({ paidAt: payments.paidAt, paymentChannel: payments.paymentChannel })
+          .select({ paidAt: payments.paidAt, paymentChannel: payments.paymentChannel, paymentDetails: payments.paymentDetails })
           .from(payments).where(and(eq(payments.orderId, numId), eq(payments.status, "paid"))).limit(1);
         const [reg] = await db
           .select({ regCode: registrations.regCode })
@@ -587,8 +588,11 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
         const sorted = sortPrimaryFirst(emailItems);
         const subtotal = sorted.reduce((s, i) => s + Number(i.price) * i.quantity, 0);
         const discount = Number(order.discountAmount || 0);
-        const total = Number(order.totalAmount);
-        const fee = Math.round((total - (subtotal - discount)) * 100) / 100;
+        const chargeDisplay = resolveChargeDisplay(
+          order.currency ?? "THB", order.totalAmount, subtotal - discount, payment?.paymentDetails,
+        );
+        const total = chargeDisplay.totalPaid;
+        const fee = chargeDisplay.fee;
         const receiptToken = generateReceiptToken(numId);
         const receiptDownloadUrl = `${getPublicApiBaseUrl()}/api/payments/receipt/${receiptToken}`;
 
@@ -599,6 +603,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           subtotal, fee, total, order.currency ?? "THB", receiptDownloadUrl,
           order.needTaxInvoice ? { taxName: order.taxName, taxId: order.taxId, taxFullAddress: order.taxFullAddress } : undefined,
           reg?.regCode,
+          buildChargeNote(chargeDisplay),
         );
         return reply.send({ success: true, to: user.email, ...content });
 
@@ -918,7 +923,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
                 .from(orderItems).innerJoin(ticketTypes, eq(orderItems.ticketTypeId, ticketTypes.id))
                 .where(eq(orderItems.orderId, id));
               const [payment] = await db
-                .select({ paidAt: payments.paidAt, paymentChannel: payments.paymentChannel })
+                .select({ paidAt: payments.paidAt, paymentChannel: payments.paymentChannel, paymentDetails: payments.paymentDetails })
                 .from(payments).where(and(eq(payments.orderId, id), eq(payments.status, "paid"))).limit(1);
               const [reg] = await db
                 .select({ regCode: registrations.regCode })
@@ -927,8 +932,11 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               const sorted = sortPrimaryFirst(emailItems);
               const subtotal = sorted.reduce((s, i) => s + Number(i.price) * i.quantity, 0);
               const discount = Number(order.discountAmount || 0);
-              const total = Number(order.totalAmount);
-              const fee = Math.round((total - (subtotal - discount)) * 100) / 100;
+              const chargeDisplay = resolveChargeDisplay(
+                order.currency ?? "THB", order.totalAmount, subtotal - discount, payment?.paymentDetails,
+              );
+              const total = chargeDisplay.totalPaid;
+              const fee = chargeDisplay.fee;
               const receiptToken = generateReceiptToken(id);
               const receiptDownloadUrl = `${getPublicApiBaseUrl()}/api/payments/receipt/${receiptToken}`;
 
@@ -939,6 +947,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
                 subtotal, fee, total, order.currency ?? "THB", receiptDownloadUrl,
                 order.needTaxInvoice ? { taxName: order.taxName, taxId: order.taxId, taxFullAddress: order.taxFullAddress } : undefined,
                 reg?.regCode,
+                buildChargeNote(chargeDisplay),
               );
               results.push({ id, email: user.email, name: fullName, type: template, status: "sent" });
             }

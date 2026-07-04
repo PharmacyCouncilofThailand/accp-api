@@ -1017,11 +1017,17 @@ export async function sendPaymentReceiptEmail(
   currency: string,
   receiptDownloadUrl: string,
   taxInvoice?: TaxInvoiceEmailInfo,
-  regCode?: string
+  regCode?: string,
+  chargeNote?: string
 ): Promise<void> {
   const contactEmail = getContactEmail();
   const currencySymbol = currency === "THB" ? "\u0E3F" : "$";
-  const methodLabel = paymentChannel === "promptpay" ? "PromptPay (QR)" : "Credit/Debit Card";
+  const methodLabel =
+    paymentChannel === "promptpay"
+      ? "PromptPay (QR)"
+      : paymentChannel === "alipay"
+        ? "Alipay"
+        : "Credit/Debit Card";
 
   const dateStr = paidAt.toLocaleDateString("en-US", {
     year: "numeric",
@@ -1070,7 +1076,7 @@ Items:
 ${itemLines}
 ${feeLineText}
 Total Paid: ${currencySymbol}${total.toLocaleString()}
-${taxInvoiceText}
+${chargeNote ? `${chargeNote}\n` : ""}${taxInvoiceText}
 ${regCode ? `\nRegistration Code: ${regCode}\nPresent this QR code at the event for check-in.` : ""}
 
 Download your receipt (PDF): ${receiptDownloadUrl}
@@ -1258,11 +1264,16 @@ export function buildPaymentReceiptEmailContent(
   items: { name: string; type: string; price: number }[],
   subtotal: number, fee: number, total: number, currency: string,
   receiptDownloadUrl: string, taxInvoice?: { taxName: string | null; taxId: string | null; taxFullAddress: string | null },
-  regCode?: string
+  regCode?: string, chargeNote?: string
 ): { subject: string; html: string } {
   const contactEmail = getContactEmail();
   const currencySymbol = currency === "THB" ? "\u0E3F" : "$";
-  const methodLabel = paymentChannel === "promptpay" ? "PromptPay (QR)" : "Credit/Debit Card";
+  const methodLabel =
+    paymentChannel === "promptpay"
+      ? "PromptPay (QR)"
+      : paymentChannel === "alipay"
+        ? "Alipay"
+        : "Credit/Debit Card";
   const dateStr = paidAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
   const itemLines = items.map((i) => `  - ${i.name}: ${currencySymbol}${i.price.toLocaleString()}`).join("\n");
   const feeLineText = fee > 0 ? `  - Payment Processing Fee: ${currencySymbol}${fee.toLocaleString()}\n` : "";
@@ -1270,7 +1281,7 @@ export function buildPaymentReceiptEmailContent(
   const websiteUrl = getWebsiteUrl();
   const qrUrl = regCode ? `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(regCode)}` : "";
 
-  const plainText = `Dear ${getFullName(firstName, middleName, lastName)},\n\nThank you for your registration and payment for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.\n\nYour registration has been confirmed. Below is your payment summary:\n\nOrder Number: ${orderNumber}\nPayment Date: ${dateStr}\nPayment Method: ${methodLabel}\n\nItems:\n${itemLines}\n${feeLineText}Total Paid: ${currencySymbol}${total.toLocaleString()}\n${taxInvoiceText}\n${regCode ? `\nRegistration Code: ${regCode}\nPresent this QR code at the event for check-in.` : ""}\n\nDownload your receipt (PDF): ${receiptDownloadUrl}\n\nFor more information and details about the conference, go to ${websiteUrl}\n\nIf you have any questions, please contact ${contactEmail}\n\nSee you soon at ACCP 2026, Bangkok, Thailand.\n\nSincerely,\n25th ACCP committee\nBangkok Thailand`;
+  const plainText = `Dear ${getFullName(firstName, middleName, lastName)},\n\nThank you for your registration and payment for the 25th ASIAN CONFERENCE ON CLINICAL PHARMACY. The meeting will take place July 9-11, 2026, at Centara Grand & Bangkok Convention Centre at CentralWorld Bangkok, Thailand.\n\nYour registration has been confirmed. Below is your payment summary:\n\nOrder Number: ${orderNumber}\nPayment Date: ${dateStr}\nPayment Method: ${methodLabel}\n\nItems:\n${itemLines}\n${feeLineText}Total Paid: ${currencySymbol}${total.toLocaleString()}\n${chargeNote ? `${chargeNote}\n` : ""}${taxInvoiceText}\n${regCode ? `\nRegistration Code: ${regCode}\nPresent this QR code at the event for check-in.` : ""}\n\nDownload your receipt (PDF): ${receiptDownloadUrl}\n\nFor more information and details about the conference, go to ${websiteUrl}\n\nIf you have any questions, please contact ${contactEmail}\n\nSee you soon at ACCP 2026, Bangkok, Thailand.\n\nSincerely,\n25th ACCP committee\nBangkok Thailand`;
 
   let htmlContent = plainText
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")

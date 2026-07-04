@@ -47,7 +47,7 @@ import {
   resolvePaySolutionsChannel,
   resolvePaySolutionsFeeMethod,
 } from "../../utils/paySolutionsFee.js";
-import { convertUsdDiscountToThb, convertUsdToThb, isInternationalRole } from "../../utils/alipayCharge.js";
+import { buildChargeNote, convertUsdDiscountToThb, convertUsdToThb, isInternationalRole, resolveChargeDisplay } from "../../utils/alipayCharge.js";
 import { generateReceiptToken, verifyReceiptToken } from "../../utils/receiptToken.js";
 import { generateReceiptPdf } from "../../services/receiptPdf.js";
 import { sendPaymentReceiptEmail } from "../../services/emailService.js";
@@ -1455,6 +1455,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                 currency: orders.currency,
                 createdAt: orders.createdAt,
                 paidAt: payments.paidAt,
+                paymentDetails: payments.paymentDetails,
               })
               .from(orders)
               .leftJoin(payments, eq(payments.orderId, orders.id))
@@ -1475,15 +1476,22 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                 orderSeen.add(o.id);
                 return true;
               })
-              .map((o) => ({
-                orderId: o.id,
-                orderNumber: o.orderNumber,
-                totalAmount: o.totalAmount,
-                currency: o.currency,
-                purchasedAt: o.createdAt?.toISOString() || null,
-                paidAt: o.paidAt?.toISOString() || null,
-                receiptUrl: `${apiBaseUrl}/api/payments/receipt/${generateReceiptToken(o.id)}`,
-              }));
+              .map((o) => {
+                // Alipay orders store the THB charge in totalAmount — convert back to USD for display
+                const display = resolveChargeDisplay(o.currency, o.totalAmount, 0, o.paymentDetails);
+                return {
+                  orderId: o.id,
+                  orderNumber: o.orderNumber,
+                  totalAmount: String(display.totalPaid),
+                  currency: o.currency,
+                  charge: display.chargeCurrency
+                    ? { currency: display.chargeCurrency, amount: String(display.chargeAmount) }
+                    : null,
+                  purchasedAt: o.createdAt?.toISOString() || null,
+                  paidAt: o.paidAt?.toISOString() || null,
+                  receiptUrl: `${apiBaseUrl}/api/payments/receipt/${generateReceiptToken(o.id)}`,
+                };
+              });
 
             return {
               regCode: reg.regCode,
@@ -2684,8 +2692,14 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
               );
               const emailDiscount = Number(order.discountAmount || 0);
               const emailNetAmount = emailSubtotal - emailDiscount;
-              const emailTotal = Number(order.totalAmount);
-              const emailFee = Math.round((emailTotal - emailNetAmount) * 100) / 100;
+              const emailChargeDisplay = resolveChargeDisplay(
+                order.currency,
+                order.totalAmount,
+                emailNetAmount,
+                payment.paymentDetails,
+              );
+              const emailTotal = emailChargeDisplay.totalPaid;
+              const emailFee = emailChargeDisplay.fee;
 
               const receiptToken = generateReceiptToken(payment.orderId);
               const apiBaseUrl = getPublicApiBaseUrl();
@@ -2716,7 +2730,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                     taxFullAddress: order.taxFullAddress,
                   }
                   : undefined,
-                regCode
+                regCode,
+                buildChargeNote(emailChargeDisplay)
               );
             } catch (emailErr) {
               fastify.log.error(`[PAYSOLUTIONS-POSTBACK] Failed to send receipt email for order ${payment.orderId}: ${emailErr}`);
@@ -3220,10 +3235,16 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
 
       const sortedItems = sortOrderItemsPrimaryFirst(items);
       const subtotal = sortedItems.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0);
-      const totalPaid = Number(paymentData.amount);
       const verifyDiscount = Number(order.discountAmount || 0);
       const verifyNetAmount = subtotal - verifyDiscount;
-      const fee = Math.round((totalPaid - verifyNetAmount) * 100) / 100;
+      const chargeDisplay = resolveChargeDisplay(
+        order.currency,
+        paymentData.amount,
+        verifyNetAmount,
+        paymentData.paymentDetails,
+      );
+      const totalPaid = chargeDisplay.totalPaid;
+      const fee = chargeDisplay.fee;
 
       // Generate receipt download URL for paid orders
       let receiptDownloadUrl: string | null = null;
@@ -3274,7 +3295,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
                     taxFullAddress: order.taxFullAddress,
                   }
                   : undefined,
-                verifyRegCode
+                verifyRegCode,
+                buildChargeNote(chargeDisplay)
               );
             } catch (emailErr) {
               fastify.log.error(`[VERIFY] Failed to send receipt email for order ${order.id}: ${emailErr}`);
@@ -3330,6 +3352,13 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           discount: String(verifyDiscount),
           promoCode: order.promoCode || null,
           fee: fee > 0 ? String(fee) : "0",
+          totalPaid: String(totalPaid),
+          charge: chargeDisplay.chargeCurrency
+            ? {
+              currency: chargeDisplay.chargeCurrency,
+              amount: String(chargeDisplay.chargeAmount),
+            }
+            : null,
         },
       });
     }
@@ -3606,6 +3635,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           .select({
             paidAt: payments.paidAt,
             paymentChannel: payments.paymentChannel,
+            paymentDetails: payments.paymentDetails,
           })
           .from(payments)
           .where(eq(payments.orderId, orderId))
@@ -3644,14 +3674,20 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
 
         const sortedItems = sortOrderItemsPrimaryFirst(items);
 
-        // 6. Calculate fee (accounting for discount)
+        // 6. Calculate fee (accounting for discount + Alipay THB charge conversion)
         const subtotal = sortedItems.reduce(
           (sum, item) => sum + Number(item.price) * item.quantity, 0
         );
         const receiptDiscount = Number(order.discountAmount || 0);
         const receiptNetAmount = subtotal - receiptDiscount;
-        const total = Number(order.totalAmount);
-        const fee = Math.round((total - receiptNetAmount) * 100) / 100;
+        const receiptChargeDisplay = resolveChargeDisplay(
+          order.currency,
+          order.totalAmount,
+          receiptNetAmount,
+          payment?.paymentDetails,
+        );
+        const total = receiptChargeDisplay.totalPaid;
+        const fee = receiptChargeDisplay.fee;
 
         // Get event name from registrations
         const [reg] = await db
@@ -3665,10 +3701,16 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           : [];
 
         // 7. Generate PDF
+        const receiptChannel: "promptpay" | "card" | "alipay" =
+          payment?.paymentChannel === "promptpay"
+            ? "promptpay"
+            : payment?.paymentChannel === "alipay"
+              ? "alipay"
+              : "card";
         const pdfStream = await generateReceiptPdf({
           orderNumber: order.orderNumber,
           paidAt: payment?.paidAt || new Date(),
-          paymentChannel: (payment?.paymentChannel === "promptpay" ? "promptpay" : "card") as "promptpay" | "card",
+          paymentChannel: receiptChannel,
           currency: order.currency,
           eventName: event?.eventName || undefined,
           items: sortedItems.map((i) => ({
@@ -3682,6 +3724,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
           promoCode: order.promoCode,
           fee: fee > 0 ? fee : 0,
           total,
+          chargeNote: buildChargeNote(receiptChargeDisplay),
           customerName: getFullName(user.firstName, user.middleName, user.lastName),
           customerEmail: user.email,
           taxInvoice: order.needTaxInvoice

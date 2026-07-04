@@ -41,7 +41,7 @@ export interface ReceiptTaxInvoiceInfo {
 export interface ReceiptData {
   orderNumber: string;
   paidAt: Date;
-  paymentChannel: "promptpay" | "card";
+  paymentChannel: "promptpay" | "card" | "alipay";
   currency: string;
   items: ReceiptItem[];
   subtotal: number;
@@ -49,6 +49,8 @@ export interface ReceiptData {
   promoCode?: string | null;
   fee: number;
   total: number;
+  /** Reference note when the actual charge was made in a different currency (e.g. Alipay THB charge on USD order) */
+  chargeNote?: string;
   customerName: string;
   customerEmail: string;
   taxInvoice?: ReceiptTaxInvoiceInfo;
@@ -74,8 +76,10 @@ function fmtDateTime(d: Date): string {
   return `${datePart} at ${timePart}`;
 }
 
-function paymentChannelLabel(ch: "promptpay" | "card"): string {
-  return ch === "promptpay" ? "PromptPay (QR)" : "Credit / Debit Card";
+function paymentChannelLabel(ch: "promptpay" | "card" | "alipay"): string {
+  if (ch === "promptpay") return "PromptPay (QR)";
+  if (ch === "alipay") return "Alipay";
+  return "Credit / Debit Card";
 }
 
 
@@ -184,6 +188,10 @@ function buildReceiptHtml(data: ReceiptData): string {
                 <td style="text-align: right; padding: 10px 0; font-weight: bold; font-size: 16px;">Total Paid</td>
                 <td style="text-align: right; padding: 10px 0; font-weight: bold; font-size: 16px; border-top: 1px solid #000; border-bottom: 3px double #000;">${escHtml(fmtMoney(data.total, data.currency))}</td>
             </tr>
+            ${data.chargeNote ? `
+            <tr>
+                <td colspan="2" style="text-align: right; padding: 6px 0; font-size: 12px; color: #555;">${escHtml(data.chargeNote)}</td>
+            </tr>` : ""}
         </table>
 
         <!-- Footer -->
@@ -434,6 +442,13 @@ export async function generateReceiptPdf(data: ReceiptData): Promise<PassThrough
   doc.strokeColor(C_BLACK).lineWidth(0.75);
   doc.moveTo(totalsValueX, y).lineTo(MARGIN_X + CONTENT_W, y).stroke();
   doc.moveTo(totalsValueX, y + 1.5).lineTo(MARGIN_X + CONTENT_W, y + 1.5).stroke();
+
+  // Optional cross-currency charge note (e.g. Alipay charged in THB)
+  if (data.chargeNote) {
+    y += 10;
+    doc.font("Sarabun").fontSize(9).fillColor(C_MUTED);
+    doc.text(data.chargeNote, MARGIN_X, y, { width: CONTENT_W, align: "right" });
+  }
 
   // ── Footer (pinned near bottom of page) ───────────────────────────────
   const footerY = PAGE_H - 70;
