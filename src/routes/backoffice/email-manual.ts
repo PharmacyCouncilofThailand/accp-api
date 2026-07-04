@@ -289,7 +289,8 @@ async function getAbstractScheduleContext(abstractId: number) {
 
   if (!author) return null;
 
-  const presentationType = ab.presentationType === "oral" ? "oral" : "poster";
+  const presentationType: "oral" | "poster" =
+    ab.presentationType === "oral" ? "oral" : "poster";
   const scheduleLines = buildScheduleDetailLines(ab);
 
   return { ab, author, presentationType, scheduleLines };
