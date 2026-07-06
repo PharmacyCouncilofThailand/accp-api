@@ -177,7 +177,7 @@ export default async function publicTicketsRoutes(fastify: FastifyInstance) {
                     const ticketSessionMap = new Map<number, LinkedSession[]>();
                     for (const row of linkedRows) {
                         let enrolled = enrollMap.get(row.sessionId) || 0;
-                        if (row.sessionCode === "WORKSHOP-04" || row.sessionId === 11) {
+                        if (row.sessionCode === "WORKSHOP-01" || row.sessionId === 12) {
                             enrolled += 20;
                         }
                         const capacity = row.maxCapacity || 0;

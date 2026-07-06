@@ -678,14 +678,14 @@ async function countConfirmedWorkshopEnrollments(eventId: number, sessionId: num
 
   let enrolled = row?.count ?? 0;
 
-  // Retrieve the session code to check if it matches WORKSHOP-04 (or ID 11)
+  // Retrieve the session code to check if it matches WORKSHOP-01 (or ID 12)
   const [session] = await db
     .select({ sessionCode: sessions.sessionCode })
     .from(sessions)
     .where(eq(sessions.id, sessionId))
     .limit(1);
 
-  if (session && (session.sessionCode === "WORKSHOP-04" || sessionId === 11)) {
+  if (session && (session.sessionCode === "WORKSHOP-01" || sessionId === 12)) {
     enrolled += 20;
   }
 
