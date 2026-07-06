@@ -1519,11 +1519,20 @@ export async function sendPresentationScheduleNotificationEmail(
 
   try {
     await sendNipaMailHtml(email, subject, html, attachments);
+    const pdfLog = attachment
+      ? `PDF attached successfully (${attachment.fileName}, ${attachment.pdf.length} bytes)`
+      : "PDF not attached";
     console.log(
-      `Presentation schedule email sent to ${email}${attachment ? " (with PDF)" : ""}`,
+      `[presentation-schedule] sent to ${email} | ${trackingId} | ${pdfLog}`,
     );
   } catch (error) {
-    console.error("Error sending presentation schedule email:", error);
+    const pdfLog = attachment
+      ? `intended attachment: ${attachment.fileName}`
+      : "no PDF";
+    console.error(
+      `[presentation-schedule] failed to send to ${email} | ${trackingId} | ${pdfLog}:`,
+      error,
+    );
     throw error;
   }
 }

@@ -150,6 +150,9 @@ export interface ManualEmailResult {
 // Helper utilities
 // ─────────────────────────────────────────────────────────────────────────────
 
+const EMAIL_SEND_DELAY_MS = 700;
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 function getPublicApiBaseUrl(): string {
   const raw = (process.env.API_BASE_URL || "http://localhost:3002").trim().replace(/\/$/, "");
   return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
@@ -924,9 +927,16 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
 
     const uniqueIds = [...new Set(recipientIds.map(Number))];
     const results: ManualEmailResult[] = [];
+    let delayBeforeNextSend = false;
 
     try {
       for (const id of uniqueIds) {
+        if (delayBeforeNextSend) {
+          await delay(EMAIL_SEND_DELAY_MS);
+          delayBeforeNextSend = false;
+        }
+
+        const resultCountBefore = results.length;
 
         // ── User-based templates ─────────────────────────────────────────────
         if (cfg.recipientType === "user") {
@@ -1252,10 +1262,15 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
                 continue;
               }
 
+              const trackingLabel = ctx.ab.trackingId ?? `#${ctx.ab.id}`;
               const attachment = loadPresentationSchedulePdf(ctx.presentationType);
-              if (!attachment) {
+              if (attachment) {
+                fastify.log.info(
+                  `email-manual: presentation-schedule-notification | ${trackingLabel} | PDF ready: ${attachment.fileName} (${attachment.pdf.length} bytes)`,
+                );
+              } else {
                 fastify.log.warn(
-                  `email-manual: schedule PDF not found for ${ctx.presentationType}; sending email without attachment`,
+                  `email-manual: presentation-schedule-notification | ${trackingLabel} | PDF attachment failed: schedule PDF not found for ${ctx.presentationType}`,
                 );
               }
 
@@ -1264,11 +1279,15 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
                 author.firstName,
                 author.middleName,
                 author.lastName,
-                ctx.ab.trackingId ?? `#${ctx.ab.id}`,
+                trackingLabel,
                 ctx.ab.title,
                 ctx.presentationType,
                 ctx.scheduleLines,
                 attachment ?? undefined,
+              );
+
+              fastify.log.info(
+                `email-manual: presentation-schedule-notification | ${trackingLabel} | sent to ${author.email} | PDF attached: ${attachment ? `yes (${attachment.fileName})` : "no"}`,
               );
             }
             results.push({ id, email: author.email, name: fullName, type: template, status: "sent" });
@@ -1317,6 +1336,13 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           } catch (err) {
             fastify.log.error(err, `email-manual: failed to send manual-registration for reg ${id}`);
             results.push({ id, email: reg.email, name: fullName, type: template, status: "failed", reason: String(err) });
+          }
+        }
+
+        if (results.length > resultCountBefore) {
+          const last = results[results.length - 1];
+          if (last.status === "sent" || last.status === "failed") {
+            delayBeforeNextSend = true;
           }
         }
       }
