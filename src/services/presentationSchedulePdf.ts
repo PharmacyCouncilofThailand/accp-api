@@ -7,7 +7,7 @@ const SCHEDULE_FILES = {
     attachmentName: "ACCP2026-Oral-Presentation-Schedule.pdf",
   },
   poster: {
-    fileName: "poster presentation schedule ACCP 2026.pdf",
+    fileName: "poster-presentation-schedule-ACCP-2026.pdf",
     attachmentName: "ACCP2026-Poster-Presentation-Schedule.pdf",
   },
 } as const;
