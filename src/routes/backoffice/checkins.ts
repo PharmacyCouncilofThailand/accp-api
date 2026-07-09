@@ -20,6 +20,9 @@ import {
     respondAlreadyCheckedIn,
 } from "../../services/checkInScanLog.js";
 
+// Allow check-in this many minutes before session.startTime
+const EARLY_CHECKIN_MINUTES = 60;
+
 export default async function (fastify: FastifyInstance) {
     // List Check-ins (reads from registration_sessions WHERE checkedInAt IS NOT NULL)
     fastify.get("", async (request, reply) => {
@@ -270,13 +273,15 @@ export default async function (fastify: FastifyInstance) {
                 const session = (regSession as any).session;
                 if (session) {
                     const now = new Date();
+                    const earlyStart = new Date(new Date(session.startTime).getTime() - EARLY_CHECKIN_MINUTES * 60 * 1000);
                     
-                    if (session.startTime && now < new Date(session.startTime)) {
+                    if (session.startTime && now < earlyStart) {
                         return reply.status(400).send({
-                            error: "Session has not started yet",
+                            error: `Check-in opens ${EARLY_CHECKIN_MINUTES} minutes before session starts`,
                             code: "SESSION_NOT_STARTED",
                             sessionName: session.sessionName,
                             startTime: session.startTime,
+                            earlyCheckinAt: earlyStart.toISOString(),
                             registration: {
                                 regCode: registration.regCode,
                                 firstName: registration.firstName,
@@ -348,10 +353,11 @@ export default async function (fastify: FastifyInstance) {
                 for (const rs of unchecked) {
                     const session = (rs as any).session;
                     if (session) {
-                        if (session.startTime && now < new Date(session.startTime)) {
+                        const earlyStart = new Date(new Date(session.startTime).getTime() - EARLY_CHECKIN_MINUTES * 60 * 1000);
+                        if (session.startTime && now < earlyStart) {
                             invalidSessions.push({
                                 sessionName: session.sessionName,
-                                reason: "Session has not started yet",
+                                reason: `Check-in opens ${EARLY_CHECKIN_MINUTES} minutes before session starts`,
                                 startTime: session.startTime,
                             });
                         } else if (session.endTime && now > new Date(session.endTime)) {
@@ -432,12 +438,14 @@ export default async function (fastify: FastifyInstance) {
                 if (session) {
                     const now = new Date();
                     
-                    if (session.startTime && now < new Date(session.startTime)) {
+                    const earlyStart = new Date(new Date(session.startTime).getTime() - EARLY_CHECKIN_MINUTES * 60 * 1000);
+                    if (session.startTime && now < earlyStart) {
                         return reply.status(400).send({
-                            error: "Session has not started yet",
+                            error: `Check-in opens ${EARLY_CHECKIN_MINUTES} minutes before session starts`,
                             code: "SESSION_NOT_STARTED",
                             sessionName: session.sessionName,
                             startTime: session.startTime,
+                            earlyCheckinAt: earlyStart.toISOString(),
                         });
                     }
 
