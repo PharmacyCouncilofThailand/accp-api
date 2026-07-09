@@ -8,7 +8,6 @@ import { uploadToGoogleDrive } from "../../services/googleDrive.js";
 import { sendPendingApprovalEmail, sendSignupNotificationEmail } from "../../services/emailService.js";
 import { sendEventSignupNotificationEmail, sendEventPendingApprovalEmail } from "../../services/emailTemplates.js";
 import { buildEventEmailContext } from "../../services/emailTemplates.types.js";
-import { verifyRecaptcha, isRecaptchaEnabled } from "../../utils/recaptcha.js";
 import { JWT_EXPIRY } from "../../constants/auth.js";
 
 const roleMapping = {
@@ -94,28 +93,9 @@ export async function authRoutes(fastify: FastifyInstance) {
         pharmacyLicenseId,
         country,
         phone,
-        recaptchaToken,
         source,
         eventCode,
       } = result.data;
-
-      // Verify reCAPTCHA if enabled
-      if (isRecaptchaEnabled()) {
-        if (!recaptchaToken) {
-          return reply.status(400).send({
-            success: false,
-            error: "reCAPTCHA verification required",
-          });
-        }
-
-        const isValidRecaptcha = await verifyRecaptcha(recaptchaToken);
-        if (!isValidRecaptcha) {
-          return reply.status(400).send({
-            success: false,
-            error: "reCAPTCHA verification failed",
-          });
-        }
-      }
 
       // 1. Check duplicate email (case-insensitive — email is lowercased by schema)
       const existingUser = await db

@@ -1,6 +1,5 @@
 import { FastifyInstance } from "fastify";
 import { sendContactFormEmail } from "../../services/emailService.js";
-import { verifyRecaptcha, isRecaptchaEnabled } from "../../utils/recaptcha.js";
 
 interface ContactFormBody {
   name: string;
@@ -8,13 +7,12 @@ interface ContactFormBody {
   phone?: string;
   subject: string;
   message: string;
-  recaptchaToken?: string;
 }
 
 export default async function publicContactRoutes(fastify: FastifyInstance) {
   // Submit contact form
   fastify.post<{ Body: ContactFormBody }>("", async (request, reply) => {
-    const { name, email, phone, subject, message, recaptchaToken } = request.body;
+    const { name, email, phone, subject, message } = request.body;
 
     // Validate required fields
     if (!name || !email || !subject || !message) {
@@ -32,27 +30,7 @@ export default async function publicContactRoutes(fastify: FastifyInstance) {
       });
     }
 
-    // Verify reCAPTCHA if enabled
-    if (isRecaptchaEnabled()) {
-      if (!recaptchaToken) {
-        fastify.log.warn("No reCAPTCHA token provided but verification is enabled");
-        return reply.status(400).send({
-          error: "Security verification required",
-          details: "Please complete the reCAPTCHA verification.",
-        });
-      }
 
-      const isValid = await verifyRecaptcha(recaptchaToken);
-      if (!isValid) {
-        fastify.log.warn("reCAPTCHA verification failed");
-        return reply.status(400).send({
-          error: "Security verification failed",
-          details: "Please complete the reCAPTCHA and try again.",
-        });
-      }
-
-      fastify.log.info("reCAPTCHA verified successfully");
-    }
 
     try {
       await sendContactFormEmail(name, email, phone || "", subject, message);

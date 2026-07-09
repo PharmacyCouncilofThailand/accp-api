@@ -28,7 +28,6 @@ export const registerBodySchema = z.object({
   country: z.string().optional(),
   phone: z.string().optional(),
   verificationDocUrl: z.string().optional(),
-  recaptchaToken: z.string().optional(),
   source: z.string().optional(),
   eventCode: z.string().optional(),
 });
@@ -37,7 +36,6 @@ export const loginBodySchema = z.object({
   email: emailField.optional(),
   pharmacyLicenseId: z.string().optional(),
   password: z.string().min(1, "Password is required"),
-  recaptchaToken: z.string().optional(),
 }).refine(data => data.email || data.pharmacyLicenseId, {
   message: "Either email or pharmacyLicenseId is required",
 });
@@ -47,7 +45,6 @@ export type RegisterInput = z.infer<typeof registerBodySchema>;
 // Forgot Password Schema
 export const forgotPasswordSchema = z.object({
   email: emailField,
-  recaptchaToken: z.string().optional(),
 });
 
 // Reset Password Schema

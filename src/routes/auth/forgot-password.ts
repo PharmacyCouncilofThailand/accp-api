@@ -5,7 +5,6 @@ import { forgotPasswordSchema } from "../../schemas/auth.schema.js";
 import { sql } from "drizzle-orm";
 import crypto from "crypto";
 import { sendPasswordResetEmail } from "../../services/emailService.js";
-import { verifyRecaptcha, isRecaptchaEnabled } from "../../utils/recaptcha.js";
 
 export default async function (fastify: FastifyInstance) {
   fastify.post("/forgot-password", async (request, reply) => {
@@ -19,25 +18,7 @@ export default async function (fastify: FastifyInstance) {
       });
     }
 
-    const { email, recaptchaToken } = result.data;
-
-    // Verify reCAPTCHA if enabled
-    if (isRecaptchaEnabled()) {
-      if (!recaptchaToken) {
-        return reply.status(400).send({
-          success: false,
-          error: "reCAPTCHA verification required",
-        });
-      }
-
-      const isValidRecaptcha = await verifyRecaptcha(recaptchaToken);
-      if (!isValidRecaptcha) {
-        return reply.status(400).send({
-          success: false,
-          error: "reCAPTCHA verification failed",
-        });
-      }
-    }
+    const { email } = result.data;
 
     try {
       // 2. Find user by email (case-insensitive — email is lowercased by schema)

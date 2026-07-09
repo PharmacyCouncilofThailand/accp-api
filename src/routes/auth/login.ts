@@ -4,7 +4,6 @@ import { users } from "../../database/schema.js";
 import { loginBodySchema } from "../../schemas/auth.schema.js";
 import bcrypt from "bcryptjs";
 import { eq, sql } from "drizzle-orm";
-import { verifyRecaptcha, isRecaptchaEnabled } from "../../utils/recaptcha.js";
 import { JWT_EXPIRY } from "../../constants/auth.js";
 import { getFullName } from "../../utils/name.js";
 
@@ -20,25 +19,7 @@ export default async function (fastify: FastifyInstance) {
       });
     }
 
-    const { email, pharmacyLicenseId, password, recaptchaToken } = result.data;
-
-    // Verify reCAPTCHA if enabled
-    if (isRecaptchaEnabled()) {
-      if (!recaptchaToken) {
-        return reply.status(400).send({
-          success: false,
-          error: "reCAPTCHA verification required",
-        });
-      }
-
-      const isValidRecaptcha = await verifyRecaptcha(recaptchaToken);
-      if (!isValidRecaptcha) {
-        return reply.status(400).send({
-          success: false,
-          error: "reCAPTCHA verification failed",
-        });
-      }
-    }
+    const { email, pharmacyLicenseId, password } = result.data;
 
     try {
       // 2. Find user (by email OR pharmacyLicenseId based on what is provided)
