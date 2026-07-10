@@ -3,14 +3,23 @@ import { db } from "../../database/index.js";
 import {
     registrations, registrationSessions, ticketTypes, ticketSessions,
     events, sessions, users, staffEventAssignments, backofficeUsers,
+    orders,
 } from "../../database/schema.js";
 import {
     registrationListSchema, updateRegistrationSchema,
     manualRegistrationSchema, addSessionsSchema,
     batchManualRegistrationSchema, checkRegisteredUsersSchema,
     registrationStatsByCountrySchema, registrationStatsByAddonSchema,
+    recordRegistrationOfflinePaymentSchema,
 } from "../../schemas/registrations.schema.js";
 import { eq, desc, ilike, and, count, sql, or, inArray, exists, notExists } from "drizzle-orm";
+import {
+    createManualOfflineOrder,
+    linkOrderToRegistration,
+    sendOrderReceiptEmail,
+    buildReceiptUrl,
+    type ManualOrderTicketLine,
+} from "../../services/manualOfflineOrder.js";
 
 function generateRegCode(): string {
     const ts = Date.now().toString(36).toUpperCase();
@@ -20,6 +29,70 @@ function generateRegCode(): string {
 
 function uniquePositiveIds(ids: number[] = [], excludeId?: number): number[] {
     return [...new Set(ids)].filter((id) => Number.isInteger(id) && id > 0 && id !== excludeId);
+}
+
+function buildOfflineOrderItems(
+    includePrimary: boolean,
+    primaryTicket: { id: number; price: string; currency: string },
+    addonTickets: { id: number; price: string; currency: string }[],
+): ManualOrderTicketLine[] {
+    const items: ManualOrderTicketLine[] = [];
+    if (includePrimary) {
+        items.push({
+            ticketTypeId: primaryTicket.id,
+            itemType: "ticket",
+            price: primaryTicket.price,
+            currency: primaryTicket.currency,
+        });
+    }
+    for (const addon of addonTickets) {
+        items.push({
+            ticketTypeId: addon.id,
+            itemType: "addon",
+            price: addon.price,
+            currency: addon.currency,
+        });
+    }
+    return items;
+}
+
+async function buildOfflineOrderItemsFromRegistration(
+    tx: any,
+    registrationId: number,
+    primaryTicketTypeId: number,
+): Promise<ManualOrderTicketLine[]> {
+    const [primaryTicket] = await tx
+        .select({
+            id: ticketTypes.id,
+            price: ticketTypes.price,
+            currency: ticketTypes.currency,
+        })
+        .from(ticketTypes)
+        .where(eq(ticketTypes.id, primaryTicketTypeId))
+        .limit(1);
+    if (!primaryTicket) throw new Error("TICKET_NOT_FOUND");
+
+    const addonTicketRows = await tx
+        .select({
+            id: ticketTypes.id,
+            price: ticketTypes.price,
+            currency: ticketTypes.currency,
+            category: ticketTypes.category,
+        })
+        .from(registrationSessions)
+        .innerJoin(ticketTypes, eq(registrationSessions.ticketTypeId, ticketTypes.id))
+        .where(eq(registrationSessions.registrationId, registrationId));
+
+    const seenAddonIds = new Set<number>();
+    const addonTickets: { id: number; price: string; currency: string }[] = [];
+    for (const row of addonTicketRows) {
+        if (row.id === primaryTicketTypeId || row.category !== "addon") continue;
+        if (seenAddonIds.has(row.id)) continue;
+        seenAddonIds.add(row.id);
+        addonTickets.push({ id: row.id, price: row.price, currency: row.currency });
+    }
+
+    return buildOfflineOrderItems(true, primaryTicket, addonTickets);
 }
 
 function buildTicketSessionSelectionMap(
@@ -332,6 +405,7 @@ export default async function (fastify: FastifyInstance) {
                 .select({
                     id: registrations.id,
                     regCode: registrations.regCode,
+                    orderId: registrations.orderId,
                     email: registrations.email,
                     firstName: registrations.firstName,
                     middleName: registrations.middleName,
@@ -387,6 +461,8 @@ export default async function (fastify: FastifyInstance) {
                     room: sessions.room,
                     ticketName: ticketTypes.name,
                     ticketCategory: ticketTypes.category,
+                    ticketPrice: ticketTypes.price,
+                    ticketCurrency: ticketTypes.currency,
                     checkedInByFirstName: backofficeUsers.firstName,
                     checkedInByLastName: backofficeUsers.lastName,
                 })
@@ -397,10 +473,38 @@ export default async function (fastify: FastifyInstance) {
                 .where(eq(registrationSessions.registrationId, parseInt(id)))
                 .orderBy(sessions.startTime);
 
+            let offlineOrder: {
+                orderId: number;
+                orderNumber: string;
+                receiptUrl: string;
+                status: string;
+            } | null = null;
+
+            if (reg.orderId) {
+                const [order] = await db
+                    .select({
+                        id: orders.id,
+                        orderNumber: orders.orderNumber,
+                        status: orders.status,
+                    })
+                    .from(orders)
+                    .where(eq(orders.id, reg.orderId))
+                    .limit(1);
+                if (order && order.status === "paid") {
+                    offlineOrder = {
+                        orderId: order.id,
+                        orderNumber: order.orderNumber,
+                        receiptUrl: buildReceiptUrl(order.id),
+                        status: order.status,
+                    };
+                }
+            }
+
             return reply.send({
                 registration: {
                     ...reg,
                     sessions: regSessions,
+                    offlineOrder,
                 },
             });
         } catch (error) {
@@ -433,6 +537,108 @@ export default async function (fastify: FastifyInstance) {
         }
     });
 
+    // ── Record offline payment & issue receipt for existing registration ──
+    fastify.post("/:id/offline-payment", async (request, reply) => {
+        const staffUser = (request as any).user;
+        const { id } = request.params as { id: string };
+        const registrationId = parseInt(id);
+
+        const result = recordRegistrationOfflinePaymentSchema.safeParse(request.body);
+        if (!result.success) {
+            return reply.status(400).send({ error: "Invalid input", details: result.error.flatten() });
+        }
+
+        const offlinePayment = result.data;
+
+        try {
+            const created = await db.transaction(async (tx) => {
+                const [reg] = await tx
+                    .select({
+                        id: registrations.id,
+                        regCode: registrations.regCode,
+                        orderId: registrations.orderId,
+                        userId: registrations.userId,
+                        eventId: registrations.eventId,
+                        ticketTypeId: registrations.ticketTypeId,
+                        status: registrations.status,
+                    })
+                    .from(registrations)
+                    .where(eq(registrations.id, registrationId))
+                    .limit(1);
+
+                if (!reg) throw new Error("REGISTRATION_NOT_FOUND");
+                if (reg.status !== "confirmed") throw new Error("REGISTRATION_NOT_CONFIRMED");
+                if (!reg.userId) throw new Error("REGISTRATION_NO_USER");
+
+                if (reg.orderId) {
+                    const [existingOrder] = await tx
+                        .select({ id: orders.id, status: orders.status, orderNumber: orders.orderNumber })
+                        .from(orders)
+                        .where(eq(orders.id, reg.orderId))
+                        .limit(1);
+                    if (existingOrder?.status === "paid") {
+                        throw new Error("REGISTRATION_ALREADY_HAS_RECEIPT");
+                    }
+                }
+
+                const orderItems = await buildOfflineOrderItemsFromRegistration(
+                    tx,
+                    registrationId,
+                    reg.ticketTypeId,
+                );
+                if (orderItems.length === 0) {
+                    throw new Error("OFFLINE_PAYMENT_NO_ITEMS");
+                }
+
+                const offlineOrder = await createManualOfflineOrder(tx, {
+                    userId: reg.userId,
+                    eventId: reg.eventId,
+                    items: orderItems,
+                    offlinePayment,
+                    staffId: staffUser.id,
+                    note: `Retroactive receipt for registration ${reg.regCode}`,
+                });
+
+                await linkOrderToRegistration(tx, registrationId, offlineOrder.orderId);
+
+                return { regCode: reg.regCode, offlineOrder };
+            });
+
+            if (offlinePayment.sendReceipt !== false) {
+                setImmediate(async () => {
+                    try {
+                        await sendOrderReceiptEmail(created.offlineOrder.orderId, created.regCode);
+                    } catch (emailErr) {
+                        fastify.log.error({ err: emailErr }, "Failed to send retroactive receipt email");
+                    }
+                });
+            }
+
+            return reply.status(201).send({
+                success: true,
+                offlineOrder: created.offlineOrder,
+            });
+        } catch (error: any) {
+            const knownErrors: Record<string, { status: number; message: string }> = {
+                REGISTRATION_NOT_FOUND: { status: 404, message: "Registration not found" },
+                REGISTRATION_NOT_CONFIRMED: { status: 400, message: "Only confirmed registrations can receive a receipt" },
+                REGISTRATION_NO_USER: { status: 400, message: "Registration has no linked user account" },
+                REGISTRATION_ALREADY_HAS_RECEIPT: { status: 409, message: "This registration already has a paid order / receipt" },
+                TICKET_NOT_FOUND: { status: 404, message: "Ticket type not found" },
+                OFFLINE_PAYMENT_NO_ITEMS: { status: 400, message: "No billable items found for this registration" },
+                INVALID_OFFLINE_PAYMENT_AMOUNT: { status: 400, message: "Invalid offline payment amount" },
+            };
+
+            const known = knownErrors[error?.message];
+            if (known) {
+                return reply.status(known.status).send({ error: known.message, code: error.message });
+            }
+
+            fastify.log.error(error);
+            return reply.status(500).send({ error: "Failed to record offline payment" });
+        }
+    });
+
     // ── Manual Add Registration ──────────────────────────
     fastify.post("/manual", async (request, reply) => {
         const staffUser = (request as any).user;
@@ -441,7 +647,7 @@ export default async function (fastify: FastifyInstance) {
             return reply.status(400).send({ error: "Invalid input", details: result.error.flatten() });
         }
 
-        const { userId, eventId, ticketTypeId, addonTicketTypeIds, ticketSessionSelections, sessionIds, note } = result.data;
+        const { userId, eventId, ticketTypeId, addonTicketTypeIds, ticketSessionSelections, sessionIds, note, offlinePayment } = result.data;
 
         try {
             const registration = await db.transaction(async (tx) => {
@@ -474,7 +680,7 @@ export default async function (fastify: FastifyInstance) {
 
                 // 3. Validate ticket type exists & belongs to event
                 const [ticket] = await tx
-                    .select({ id: ticketTypes.id, name: ticketTypes.name, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
+                    .select({ id: ticketTypes.id, name: ticketTypes.name, price: ticketTypes.price, currency: ticketTypes.currency, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
                     .from(ticketTypes)
                     .where(and(eq(ticketTypes.id, ticketTypeId), eq(ticketTypes.eventId, eventId)))
                     .limit(1);
@@ -482,7 +688,7 @@ export default async function (fastify: FastifyInstance) {
 
                 const addonTickets = selectedAddonTicketIds.length > 0
                     ? await tx
-                        .select({ id: ticketTypes.id, name: ticketTypes.name, groupName: ticketTypes.groupName, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
+                        .select({ id: ticketTypes.id, name: ticketTypes.name, groupName: ticketTypes.groupName, price: ticketTypes.price, currency: ticketTypes.currency, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
                         .from(ticketTypes)
                         .where(and(
                             inArray(ticketTypes.id, selectedAddonTicketIds),
@@ -623,6 +829,30 @@ export default async function (fastify: FastifyInstance) {
                     ...addonSessionLinksToInsert.map(link => link.sessionId),
                 ]);
 
+                let offlineOrder: {
+                    orderId: number;
+                    orderNumber: string;
+                    receiptUrl: string;
+                    totalAmount: number;
+                    currency: string;
+                } | null = null;
+
+                if (offlinePayment) {
+                    const orderItems = buildOfflineOrderItems(!existing, ticket, addonTickets);
+                    if (orderItems.length === 0) {
+                        throw new Error("OFFLINE_PAYMENT_NO_ITEMS");
+                    }
+                    offlineOrder = await createManualOfflineOrder(tx, {
+                        userId,
+                        eventId,
+                        items: orderItems,
+                        offlinePayment,
+                        staffId: staffUser.id,
+                        note,
+                    });
+                    await linkOrderToRegistration(tx, finalReg.id, offlineOrder.orderId);
+                }
+
                 return {
                     id: finalReg.id,
                     regCode: finalReg.regCode,
@@ -635,17 +865,38 @@ export default async function (fastify: FastifyInstance) {
                     userFirstName: user.firstName,
                     userMiddleName: user.middleName,
                     userLastName: user.lastName,
+                    offlineOrder,
                 };
             });
 
             reply.status(201).send({
                 success: true,
-                registration,
+                registration: {
+                    id: registration.id,
+                    regCode: registration.regCode,
+                    ticketName: registration.ticketName,
+                    eventName: registration.eventName,
+                    sessionCount: registration.sessionCount,
+                    sessionsLinked: registration.sessionsLinked,
+                    userEmail: registration.userEmail,
+                    userFirstName: registration.userFirstName,
+                    userMiddleName: registration.userMiddleName,
+                    userLastName: registration.userLastName,
+                    offlineOrder: registration.offlineOrder,
+                },
             });
 
             // Send confirmation email in background (non-blocking)
             setImmediate(async () => {
                 try {
+                    if (offlinePayment && offlinePayment.sendReceipt !== false && registration.offlineOrder) {
+                        await sendOrderReceiptEmail(
+                            registration.offlineOrder.orderId,
+                            registration.regCode,
+                        );
+                        return;
+                    }
+
                     const sessionDetails = registration.sessionsLinked.length > 0
                         ? await db
                             .select({ sessionName: sessions.sessionName, startTime: sessions.startTime, endTime: sessions.endTime })
@@ -700,6 +951,8 @@ export default async function (fastify: FastifyInstance) {
                 WORKSHOP_REQUIRES_ONE_SESSION: { status: 400, message: "Workshop add-ons require exactly one selected session" },
                 SESSION_NOT_FOUND: { status: 400, message: "Some selected sessions do not belong to this event" },
                 SESSION_NOT_LINKED_TO_TICKET: { status: 400, message: "Some selected sessions are not linked to the selected ticket type" },
+                OFFLINE_PAYMENT_NO_ITEMS: { status: 400, message: "Offline payment requires at least one billable ticket item" },
+                INVALID_OFFLINE_PAYMENT_AMOUNT: { status: 400, message: "Invalid offline payment amount" },
             };
 
             const known = knownErrors[error?.message];
@@ -1057,7 +1310,7 @@ export default async function (fastify: FastifyInstance) {
             return reply.status(400).send({ error: "Invalid input", details: result.error.flatten() });
         }
 
-        const { userIds, eventId, ticketTypeId, addonTicketTypeIds, ticketSessionSelections, sessionIds, note } = result.data;
+        const { userIds, eventId, ticketTypeId, addonTicketTypeIds, ticketSessionSelections, sessionIds, note, offlinePayment } = result.data;
 
         try {
             const results = await db.transaction(async (tx) => {
@@ -1082,7 +1335,7 @@ export default async function (fastify: FastifyInstance) {
 
                 // 2. Validate ticket type exists & belongs to event
                 const [ticket] = await tx
-                    .select({ id: ticketTypes.id, name: ticketTypes.name, category: ticketTypes.category, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
+                    .select({ id: ticketTypes.id, name: ticketTypes.name, category: ticketTypes.category, price: ticketTypes.price, currency: ticketTypes.currency, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
                     .from(ticketTypes)
                     .where(and(eq(ticketTypes.id, ticketTypeId), eq(ticketTypes.eventId, eventId)))
                     .limit(1);
@@ -1090,7 +1343,7 @@ export default async function (fastify: FastifyInstance) {
 
                 const addonTickets = selectedAddonTicketIds.length > 0
                     ? await tx
-                        .select({ id: ticketTypes.id, name: ticketTypes.name, groupName: ticketTypes.groupName, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
+                        .select({ id: ticketTypes.id, name: ticketTypes.name, groupName: ticketTypes.groupName, price: ticketTypes.price, currency: ticketTypes.currency, quota: ticketTypes.quota, soldCount: ticketTypes.soldCount })
                         .from(ticketTypes)
                         .where(and(
                             inArray(ticketTypes.id, selectedAddonTicketIds),
@@ -1323,6 +1576,32 @@ export default async function (fastify: FastifyInstance) {
                     for (const addon of addonTickets) {
                         addonAddedCounts.set(addon.id, (addonAddedCounts.get(addon.id) || 0) + 1);
                     }
+
+                    let offlineOrder: {
+                        orderId: number;
+                        orderNumber: string;
+                        receiptUrl: string;
+                        totalAmount: number;
+                        currency: string;
+                    } | null = null;
+
+                    if (offlinePayment) {
+                        const orderItems = buildOfflineOrderItems(isNewReg, ticket, addonTickets);
+                        if (orderItems.length === 0) {
+                            skippedList.push({ userId, reason: "OFFLINE_PAYMENT_NO_ITEMS" });
+                            continue;
+                        }
+                        offlineOrder = await createManualOfflineOrder(tx, {
+                            userId,
+                            eventId,
+                            items: orderItems,
+                            offlinePayment,
+                            staffId: staffUser.id,
+                            note,
+                        });
+                        await linkOrderToRegistration(tx, regId, offlineOrder.orderId);
+                    }
+
                     successList.push({
                         registrationId: regId,
                         userId,
@@ -1330,6 +1609,7 @@ export default async function (fastify: FastifyInstance) {
                         firstName: user.firstName,
                         middleName: user.middleName,
                         lastName: user.lastName,
+                        offlineOrder,
                     });
                 }
 
@@ -1382,6 +1662,11 @@ export default async function (fastify: FastifyInstance) {
 
                         for (const reg of results.successList) {
                             try {
+                                if (offlinePayment && offlinePayment.sendReceipt !== false && reg.offlineOrder) {
+                                    await sendOrderReceiptEmail(reg.offlineOrder.orderId, reg.regCode);
+                                    continue;
+                                }
+
                                 const user = await db
                                     .select({ email: users.email })
                                     .from(users)
@@ -1439,6 +1724,8 @@ export default async function (fastify: FastifyInstance) {
                 WORKSHOP_REQUIRES_ONE_SESSION: { status: 400, message: "Workshop add-ons require exactly one selected session" },
                 SESSION_NOT_FOUND: { status: 400, message: "Some selected sessions do not belong to this event" },
                 SESSION_NOT_LINKED_TO_TICKET: { status: 400, message: "Some selected sessions are not linked to the selected ticket type" },
+                OFFLINE_PAYMENT_NO_ITEMS: { status: 400, message: "Offline payment requires at least one billable ticket item" },
+                INVALID_OFFLINE_PAYMENT_AMOUNT: { status: 400, message: "Invalid offline payment amount" },
             };
 
             const known = knownErrors[error?.message];

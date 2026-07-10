@@ -12,6 +12,21 @@ const NIPAMAIL_API_URL = "https://api.nipamail.com";
 let cachedToken: string | null = null;
 let tokenExpiry: number = 0;
 
+export function formatPaymentChannelLabel(channel: string): string {
+  switch (channel) {
+    case "promptpay":
+    case "qr":
+      return "PromptPay (QR)";
+    case "alipay":
+      return "Alipay";
+    case "card":
+    case "full":
+      return "Credit/Debit Card";
+    default:
+      return "Credit/Debit Card";
+  }
+}
+
 /**
  * Encode content to Base64
  */
@@ -1022,12 +1037,7 @@ export async function sendPaymentReceiptEmail(
 ): Promise<void> {
   const contactEmail = getContactEmail();
   const currencySymbol = currency === "THB" ? "\u0E3F" : "$";
-  const methodLabel =
-    paymentChannel === "promptpay"
-      ? "PromptPay (QR)"
-      : paymentChannel === "alipay"
-        ? "Alipay"
-        : "Credit/Debit Card";
+  const methodLabel = formatPaymentChannelLabel(paymentChannel);
 
   const dateStr = paidAt.toLocaleDateString("en-US", {
     year: "numeric",
@@ -1268,12 +1278,7 @@ export function buildPaymentReceiptEmailContent(
 ): { subject: string; html: string } {
   const contactEmail = getContactEmail();
   const currencySymbol = currency === "THB" ? "\u0E3F" : "$";
-  const methodLabel =
-    paymentChannel === "promptpay"
-      ? "PromptPay (QR)"
-      : paymentChannel === "alipay"
-        ? "Alipay"
-        : "Credit/Debit Card";
+  const methodLabel = formatPaymentChannelLabel(paymentChannel);
   const dateStr = paidAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Bangkok" });
   const itemLines = items.map((i) => `  - ${i.name}: ${currencySymbol}${i.price.toLocaleString()}`).join("\n");
   const feeLineText = fee > 0 ? `  - Payment Processing Fee: ${currencySymbol}${fee.toLocaleString()}\n` : "";

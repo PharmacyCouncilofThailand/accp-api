@@ -25,6 +25,11 @@ function getChromiumExecutablePath(): string | undefined {
   return undefined;
 }
 
+export type ReceiptPaymentChannel =
+  | "promptpay"
+  | "card"
+  | "alipay";
+
 export interface ReceiptItem {
   name: string;
   type: "ticket" | "addon";
@@ -41,7 +46,7 @@ export interface ReceiptTaxInvoiceInfo {
 export interface ReceiptData {
   orderNumber: string;
   paidAt: Date;
-  paymentChannel: "promptpay" | "card" | "alipay";
+  paymentChannel: ReceiptPaymentChannel;
   currency: string;
   items: ReceiptItem[];
   subtotal: number;
@@ -76,10 +81,18 @@ function fmtDateTime(d: Date): string {
   return `${datePart} at ${timePart}`;
 }
 
-function paymentChannelLabel(ch: "promptpay" | "card" | "alipay"): string {
+function paymentChannelLabel(ch: ReceiptPaymentChannel): string {
   if (ch === "promptpay") return "PromptPay (QR)";
   if (ch === "alipay") return "Alipay";
   return "Credit / Debit Card";
+}
+
+export function resolveReceiptPaymentChannel(
+  channel: string | null | undefined,
+): ReceiptPaymentChannel {
+  if (channel === "promptpay" || channel === "qr") return "promptpay";
+  if (channel === "alipay") return "alipay";
+  return "card";
 }
 
 

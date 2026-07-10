@@ -49,7 +49,7 @@ import {
 } from "../../utils/paySolutionsFee.js";
 import { buildChargeNote, convertUsdDiscountToThb, convertUsdToThb, isInternationalRole, resolveChargeDisplay } from "../../utils/alipayCharge.js";
 import { generateReceiptToken, verifyReceiptToken } from "../../utils/receiptToken.js";
-import { generateReceiptPdf } from "../../services/receiptPdf.js";
+import { generateReceiptPdf, resolveReceiptPaymentChannel } from "../../services/receiptPdf.js";
 import { sendPaymentReceiptEmail } from "../../services/emailService.js";
 import { getFullName } from "../../utils/name.js";
 import { validatePromoCode, reservePromoUsage, settlePromoUsageSuccess, cancelPromoUsage } from "../../utils/promoEngine.js";
@@ -3607,6 +3607,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
             currency: orders.currency,
             status: orders.status,
             userId: orders.userId,
+            eventId: orders.eventId,
             needTaxInvoice: orders.needTaxInvoice,
             taxName: orders.taxName,
             taxId: orders.taxId,
@@ -3690,23 +3691,32 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         const fee = receiptChargeDisplay.fee;
 
         // Get event name from registrations
-        const [reg] = await db
+        let [reg] = await db
           .select({ eventId: registrations.eventId })
           .from(registrations)
           .where(eq(registrations.orderId, order.id))
           .limit(1);
 
+        if (!reg && order.eventId) {
+          [reg] = await db
+            .select({ eventId: registrations.eventId })
+            .from(registrations)
+            .where(and(
+              eq(registrations.userId, order.userId),
+              eq(registrations.eventId, order.eventId),
+              eq(registrations.status, "confirmed"),
+            ))
+            .limit(1);
+        }
+
         const [event] = reg
           ? await db.select({ eventName: events.eventName }).from(events).where(eq(events.id, reg.eventId)).limit(1)
-          : [];
+          : order.eventId
+            ? await db.select({ eventName: events.eventName }).from(events).where(eq(events.id, order.eventId)).limit(1)
+            : [];
 
         // 7. Generate PDF
-        const receiptChannel: "promptpay" | "card" | "alipay" =
-          payment?.paymentChannel === "promptpay"
-            ? "promptpay"
-            : payment?.paymentChannel === "alipay"
-              ? "alipay"
-              : "card";
+        const receiptChannel = resolveReceiptPaymentChannel(payment?.paymentChannel);
         const pdfStream = await generateReceiptPdf({
           orderNumber: order.orderNumber,
           paidAt: payment?.paidAt || new Date(),

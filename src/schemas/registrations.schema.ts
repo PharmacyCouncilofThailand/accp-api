@@ -36,6 +36,16 @@ const ticketSessionSelectionSchema = z.object({
     sessionIds: z.array(z.number()).default([]),
 });
 
+export const offlinePaymentSchema = z.object({
+    channel: z.enum(['card', 'alipay', 'promptpay']),
+    amount: z.coerce.number().min(0, "Amount must be 0 or greater"),
+    currency: z.literal('THB').optional().default('THB'),
+    paidAt: z.coerce.date().optional(),
+    sendReceipt: z.boolean().optional().default(true),
+});
+
+export const recordRegistrationOfflinePaymentSchema = offlinePaymentSchema;
+
 export const manualRegistrationSchema = z.object({
     userId: z.number().min(1, "User is required"),
     eventId: z.number().min(1, "Event is required"),
@@ -44,6 +54,7 @@ export const manualRegistrationSchema = z.object({
     ticketSessionSelections: z.array(ticketSessionSelectionSchema).optional().default([]),
     sessionIds: z.array(z.number()).optional().default([]),
     note: z.string().max(500).optional(),
+    offlinePayment: offlinePaymentSchema.optional(),
 });
 
 export const addSessionsSchema = z.object({
@@ -60,6 +71,7 @@ export const batchManualRegistrationSchema = z.object({
     ticketSessionSelections: z.array(ticketSessionSelectionSchema).optional().default([]),
     sessionIds: z.array(z.number()).optional().default([]),
     note: z.string().max(500).optional(),
+    offlinePayment: offlinePaymentSchema.optional(),
 });
 
 export const checkRegisteredUsersSchema = z.object({
