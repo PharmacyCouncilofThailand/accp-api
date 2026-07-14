@@ -267,6 +267,7 @@ function drawCertificateName(
 export async function generateCertificatePdf(
   templateCode: string,
   recipient: CertificateNameParts,
+  options?: { yOffset?: number },
 ): Promise<{ buffer: Buffer; certificateName: string; tooLong: boolean }> {
   const template = getCertificateTemplate(templateCode);
   if (!template) {
@@ -286,11 +287,16 @@ export async function generateCertificatePdf(
   const [copiedPage] = await pdfDoc.copyPages(srcDoc, [0]);
   const page = pdfDoc.addPage(copiedPage);
   const fonts = await embedFonts(pdfDoc);
+  const yOffset = options?.yOffset ?? 0;
+  const placement: CertificateNamePlacement = {
+    ...template.namePlacement,
+    y: template.namePlacement.y + yOffset,
+  };
   const drawResult = drawCertificateName(
     page,
     certificateName,
     fonts,
-    template.namePlacement,
+    placement,
   );
 
   const bytes = await pdfDoc.save();

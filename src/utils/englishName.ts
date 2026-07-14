@@ -25,6 +25,18 @@ export function isEnglishLatinRegistrationName(
   return isEnglishLatinNamePart(middle);
 }
 
+/** Confirmed-eligible but not English Latin (Thai / mixed / other scripts). Requires non-empty first + last. */
+export function isNonEnglishRegistrationName(
+  firstName: string | null | undefined,
+  middleName: string | null | undefined,
+  lastName: string | null | undefined,
+): boolean {
+  const first = (firstName ?? "").trim();
+  const last = (lastName ?? "").trim();
+  if (!first || !last) return false;
+  return !isEnglishLatinRegistrationName(firstName, middleName, lastName);
+}
+
 /** Trim only — keep `.` and `-` for the certificate name. */
 export function toParticipationCertificateNameParts(parts: {
   firstName: string;

@@ -46,6 +46,7 @@ import { buildChargeNote, resolveChargeDisplay } from "../../utils/alipayCharge.
 import { getFullName } from "../../utils/name.js";
 import {
   isEnglishLatinRegistrationName,
+  isNonEnglishRegistrationName,
   toParticipationCertificateNameParts,
 } from "../../utils/englishName.js";
 import {
@@ -142,15 +143,75 @@ const TEMPLATE_CONFIG = {
     description: "Notify accepted presenters of their room or poster board assignment (with schedule PDF attached)",
   },
   "participation-certificate": {
-    label: "Participation Certificate",
+    label: "Participation Certificate (English)",
     recipientType: "registration" as const,
     requiresComment: false,
     description:
       "Certificate of Participation PDF for confirmed registrations with English names (from registrations table)",
   },
+  "participation-certificate-non-english": {
+    label: "Participation Certificate (Non-English)",
+    recipientType: "registration" as const,
+    requiresComment: false,
+    description:
+      "Certificate of Participation PDF for confirmed registrations with non-English names (from registrations table)",
+  },
 } as const;
 
 type TemplateId = keyof typeof TEMPLATE_CONFIG;
+
+const PARTICIPATION_CERTIFICATE_TEMPLATES = new Set<string>([
+  "participation-certificate",
+  "participation-certificate-non-english",
+]);
+
+function isParticipationCertificateTemplate(template: string): boolean {
+  return PARTICIPATION_CERTIFICATE_TEMPLATES.has(template);
+}
+
+function matchesParticipationCertificateNameFilter(
+  template: string,
+  firstName: string,
+  middleName: string | null,
+  lastName: string,
+): boolean {
+  if (template === "participation-certificate-non-english") {
+    return isNonEnglishRegistrationName(firstName, middleName, lastName);
+  }
+  return isEnglishLatinRegistrationName(firstName, middleName, lastName);
+}
+
+function participationCertificateNameFilterError(template: string): string {
+  return template === "participation-certificate-non-english"
+    ? "Name must be non-English for this certificate template"
+    : "Name must be English (Latin letters) for this certificate template";
+}
+
+/** Lift Thai/non-English baseline so lower vowels clear the underline. */
+const PARTICIPATION_NON_ENGLISH_Y_OFFSET = 10;
+
+/** Non-English names cannot be put in Content-Disposition — use a fixed ASCII filename. */
+const PARTICIPATION_CERT_NON_ENGLISH_FILENAME = "Participation_Certificate.pdf";
+
+function participationCertificatePdfOptions(templateOrNonEnglish: string | boolean): {
+  yOffset?: number;
+} {
+  const isNonEn =
+    templateOrNonEnglish === true ||
+    templateOrNonEnglish === "participation-certificate-non-english";
+  return isNonEn ? { yOffset: PARTICIPATION_NON_ENGLISH_Y_OFFSET } : {};
+}
+
+function participationCertificateFileName(
+  templateOrNonEnglish: string | boolean,
+  parts: { titlePrefix: string; firstName: string; middleName?: string | null; lastName: string },
+): string {
+  const useFixed =
+    templateOrNonEnglish === true ||
+    templateOrNonEnglish === "participation-certificate-non-english";
+  if (useFixed) return PARTICIPATION_CERT_NON_ENGLISH_FILENAME;
+  return buildCertificateFilename("participation", parts);
+}
 
 export interface ManualEmailResult {
   id: number;
@@ -356,10 +417,11 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
         if (reg.status !== "confirmed") {
           return reply.status(400).send({ success: false, error: "Registration is not confirmed" });
         }
-        if (!isEnglishLatinRegistrationName(reg.firstName, reg.middleName, reg.lastName)) {
+        if (!isEnglishLatinRegistrationName(reg.firstName, reg.middleName, reg.lastName)
+          && !isNonEnglishRegistrationName(reg.firstName, reg.middleName, reg.lastName)) {
           return reply.status(400).send({
             success: false,
-            error: "Name must be English (Latin letters) for this certificate template",
+            error: "Registration name is empty or invalid",
           });
         }
 
@@ -369,13 +431,22 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           lastName: reg.lastName,
         });
         const certificateName = formatCertificateName(recipientParts);
-        const fileName = buildCertificateFilename("participation", recipientParts);
+        const isNonEnglish = isNonEnglishRegistrationName(
+          reg.firstName,
+          reg.middleName,
+          reg.lastName,
+        );
+        const fileName = participationCertificateFileName(isNonEnglish, recipientParts);
 
         fastify.log.info(
           `email-manual: participation-certificate PDF preview | regId=${numId} | email=${reg.email} | nameOnCert="${certificateName}" | fileName=${fileName} | generating…`,
         );
         const startedAt = Date.now();
-        const { buffer } = await generateCertificatePdf("participation", recipientParts);
+        const { buffer } = await generateCertificatePdf(
+          "participation",
+          recipientParts,
+          participationCertificatePdfOptions(isNonEnglish),
+        );
         fastify.log.info(
           `email-manual: participation-certificate PDF preview ready | regId=${numId} | nameOnCert="${certificateName}" | fileName=${fileName} | size=${buffer.length} bytes | elapsed=${Date.now() - startedAt}ms`,
         );
@@ -386,7 +457,10 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           .send(buffer);
       } catch (err) {
         fastify.log.error(err, "email-manual participation-certificate PDF error");
-        return reply.status(500).send({ success: false, error: "Failed to generate certificate PDF" });
+        if (!reply.sent) {
+          return reply.status(500).send({ success: false, error: "Failed to generate certificate PDF" });
+        }
+        return;
       }
     },
   );
@@ -676,7 +750,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
             )
           : undefined;
 
-        if (template === "participation-certificate") {
+        if (isParticipationCertificateTemplate(template)) {
           const rows = await db
             .select({
               id: registrations.id,
@@ -699,7 +773,12 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
 
           recipients = rows
             .filter((r) =>
-              isEnglishLatinRegistrationName(r.firstName, r.middleName, r.lastName),
+              matchesParticipationCertificateNameFilter(
+                template,
+                r.firstName,
+                r.middleName,
+                r.lastName,
+              ),
             )
             .slice(0, MAX)
             .map((r) => ({
@@ -1015,7 +1094,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
         );
         return reply.send({ success: true, to: reg.email, ...content });
 
-      } else if (template === "participation-certificate") {
+      } else if (isParticipationCertificateTemplate(template)) {
         const [reg] = await db
           .select({
             id: registrations.id,
@@ -1036,10 +1115,10 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
         if (!reg.email?.trim()) {
           return reply.status(400).send({ success: false, error: "Registration has no email" });
         }
-        if (!isEnglishLatinRegistrationName(reg.firstName, reg.middleName, reg.lastName)) {
+        if (!matchesParticipationCertificateNameFilter(template, reg.firstName, reg.middleName, reg.lastName)) {
           return reply.status(400).send({
             success: false,
-            error: "Name must be English (Latin letters) for this certificate template",
+            error: participationCertificateNameFilterError(template),
           });
         }
 
@@ -1053,7 +1132,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           nameParts.middleName,
           nameParts.lastName,
         );
-        const fileName = buildCertificateFilename("participation", nameParts);
+        const fileName = participationCertificateFileName(template, nameParts);
         return reply.send({
           success: true,
           to: reg.email,
@@ -1095,18 +1174,18 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
     const results: ManualEmailResult[] = [];
     let delayBeforeNextSend = false;
 
-    if (template === "participation-certificate") {
+    if (isParticipationCertificateTemplate(template)) {
       fastify.log.info(
-        `email-manual: participation-certificate batch start | dryRun=${Boolean(dryRun)} | recipientCount=${uniqueIds.length} | ids=[${uniqueIds.slice(0, 20).join(",")}${uniqueIds.length > 20 ? ",…" : ""}]`,
+        `email-manual: ${template} batch start | dryRun=${Boolean(dryRun)} | recipientCount=${uniqueIds.length} | ids=[${uniqueIds.slice(0, 20).join(",")}${uniqueIds.length > 20 ? ",…" : ""}]`,
       );
     }
 
     try {
       for (const id of uniqueIds) {
         if (delayBeforeNextSend) {
-          if (template === "participation-certificate") {
+          if (isParticipationCertificateTemplate(template)) {
             fastify.log.info(
-              `email-manual: participation-certificate delay ${EMAIL_SEND_DELAY_MS}ms after previous send before next PDF generate`,
+              `email-manual: ${template} delay ${EMAIL_SEND_DELAY_MS}ms after previous send before next PDF generate`,
             );
           }
           await delay(EMAIL_SEND_DELAY_MS);
@@ -1491,10 +1570,10 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
 
           const fullName = getFullName(reg.firstName, reg.middleName, reg.lastName);
 
-          if (template === "participation-certificate") {
+          if (isParticipationCertificateTemplate(template)) {
             if (reg.status !== "confirmed") {
               fastify.log.info(
-                `email-manual: participation-certificate skipped | regId=${id} | regCode=${reg.regCode} | reason=status "${reg.status}"`,
+                `email-manual: ${template} skipped | regId=${id} | regCode=${reg.regCode} | reason=status "${reg.status}"`,
               );
               results.push({
                 id, email: reg.email, name: fullName, type: template,
@@ -1504,7 +1583,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
             }
             if (!reg.email?.trim()) {
               fastify.log.info(
-                `email-manual: participation-certificate skipped | regId=${id} | regCode=${reg.regCode} | reason=no email`,
+                `email-manual: ${template} skipped | regId=${id} | regCode=${reg.regCode} | reason=no email`,
               );
               results.push({
                 id, email: "—", name: fullName, type: template,
@@ -1512,20 +1591,21 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               });
               continue;
             }
-            if (!isEnglishLatinRegistrationName(reg.firstName, reg.middleName, reg.lastName)) {
+            if (!matchesParticipationCertificateNameFilter(template, reg.firstName, reg.middleName, reg.lastName)) {
+              const reason = participationCertificateNameFilterError(template);
               fastify.log.info(
-                `email-manual: participation-certificate skipped | regId=${id} | regCode=${reg.regCode} | name="${fullName}" | reason=name not English`,
+                `email-manual: ${template} skipped | regId=${id} | regCode=${reg.regCode} | name="${fullName}" | reason=${reason}`,
               );
               results.push({
                 id, email: reg.email, name: fullName, type: template,
-                status: "skipped", reason: "Name is not English (Latin letters)",
+                status: "skipped", reason,
               });
               continue;
             }
 
             if (dryRun) {
               fastify.log.info(
-                `email-manual: participation-certificate dry-run | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | name="${fullName}"`,
+                `email-manual: ${template} dry-run | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | name="${fullName}"`,
               );
               results.push({ id, email: reg.email, name: fullName, type: template, status: "pending", reason: reg.regCode });
               continue;
@@ -1538,7 +1618,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
                 lastName: reg.lastName,
               });
               const certificateName = formatCertificateName(recipientParts);
-              const fileName = buildCertificateFilename("participation", recipientParts);
+              const fileName = participationCertificateFileName(template, recipientParts);
               const content = buildParticipationCertificateEmailContent(
                 recipientParts.firstName,
                 recipientParts.middleName,
@@ -1546,17 +1626,21 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               );
 
               fastify.log.info(
-                `email-manual: participation-certificate generate PDF | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | dbName="${fullName}" | nameOnCert="${certificateName}" | fileName=${fileName} | subject="${content.subject}"`,
+                `email-manual: ${template} generate PDF | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | dbName="${fullName}" | nameOnCert="${certificateName}" | fileName=${fileName} | subject="${content.subject}"`,
               );
               const pdfStartedAt = Date.now();
-              const { buffer } = await generateCertificatePdf("participation", recipientParts);
+              const { buffer } = await generateCertificatePdf(
+                "participation",
+                recipientParts,
+                participationCertificatePdfOptions(template),
+              );
               const pdfElapsedMs = Date.now() - pdfStartedAt;
               fastify.log.info(
-                `email-manual: participation-certificate PDF ready | regId=${id} | regCode=${reg.regCode} | fileName=${fileName} | size=${buffer.length} bytes | elapsed=${pdfElapsedMs}ms`,
+                `email-manual: ${template} PDF ready | regId=${id} | regCode=${reg.regCode} | fileName=${fileName} | size=${buffer.length} bytes | elapsed=${pdfElapsedMs}ms`,
               );
 
               fastify.log.info(
-                `email-manual: participation-certificate delay ${EMAIL_SEND_DELAY_MS}ms after PDF before send | regId=${id}`,
+                `email-manual: ${template} delay ${EMAIL_SEND_DELAY_MS}ms after PDF before send | regId=${id}`,
               );
               await delay(EMAIL_SEND_DELAY_MS);
 
@@ -1570,14 +1654,14 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               );
               const mailElapsedMs = Date.now() - mailStartedAt;
               fastify.log.info(
-                `email-manual: participation-certificate sent | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | nameOnCert="${certificateName}" | fileName=${fileName} | pdfBytes=${buffer.length} | pdfMs=${pdfElapsedMs} | mailMs=${mailElapsedMs} | status=sent`,
+                `email-manual: ${template} sent | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | nameOnCert="${certificateName}" | fileName=${fileName} | pdfBytes=${buffer.length} | pdfMs=${pdfElapsedMs} | mailMs=${mailElapsedMs} | status=sent`,
               );
               results.push({ id, email: reg.email, name: fullName, type: template, status: "sent" });
               // Post-send 700ms wait is handled by delayBeforeNextSend at the top of the next loop iteration.
             } catch (err) {
               fastify.log.error(
                 { err },
-                `email-manual: participation-certificate failed | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | name="${fullName}"`,
+                `email-manual: ${template} failed | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | name="${fullName}"`,
               );
               results.push({
                 id, email: reg.email, name: fullName, type: template,
@@ -1617,9 +1701,9 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           const last = results[results.length - 1];
           if (last.status === "sent" || last.status === "failed") {
             delayBeforeNextSend = true;
-            if (template === "participation-certificate") {
+            if (isParticipationCertificateTemplate(template)) {
               fastify.log.info(
-                `email-manual: participation-certificate will delay ${EMAIL_SEND_DELAY_MS}ms before next PDF generate | lastRegId=${last.id} | lastStatus=${last.status}`,
+                `email-manual: ${template} will delay ${EMAIL_SEND_DELAY_MS}ms before next PDF generate | lastRegId=${last.id} | lastStatus=${last.status}`,
               );
             }
           }
@@ -1633,9 +1717,9 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
         failed: results.filter((r) => r.status === "failed").length,
       };
 
-      if (template === "participation-certificate") {
+      if (isParticipationCertificateTemplate(template)) {
         fastify.log.info(
-          `email-manual: participation-certificate batch done | dryRun=${Boolean(dryRun)} | sent=${summary.sent} | failed=${summary.failed} | skipped=${summary.skipped} | pending=${summary.pending} | total=${results.length}`,
+          `email-manual: ${template} batch done | dryRun=${Boolean(dryRun)} | sent=${summary.sent} | failed=${summary.failed} | skipped=${summary.skipped} | pending=${summary.pending} | total=${results.length}`,
         );
       }
 
