@@ -1546,6 +1546,18 @@ export async function sendPresentationScheduleNotificationEmail(
  * Send contact form email to conference organizers
  * Email will be sent to accpbangkok2026@gmail.com with Reply-To set to user's email
  */
+export async function sendCertificateDeliveryEmail(
+  recipient: string,
+  subject: string,
+  bodyHtml: string,
+  attachment: EmailAttachment,
+): Promise<void> {
+  const html = wrapEmailBodyHtml(bodyHtml, {
+    fontFamily: '"EB Garamond", Garamond, "Times New Roman", serif',
+  });
+  await sendNipaMailHtml(recipient, subject, html, [attachment]);
+}
+
 export async function sendContactFormEmail(
   name: string,
   email: string,

@@ -183,6 +183,7 @@ import backofficeEmailRetrosendRoutes from "./routes/backoffice/email-retrosend.
 import backofficeEmailManualRoutes from "./routes/backoffice/email-manual.js";
 import backofficeInvitationLetterRoutes from "./routes/backoffice/invitation-letter.js";
 import backofficeAbstractAcceptLetterRoutes from "./routes/backoffice/abstract-accept-letter.js";
+import backofficeCertificatesRoutes from "./routes/backoffice/certificates.js";
 import publicSpeakersRoutes from "./routes/public/speakers.js";
 import publicEventsRoutes from "./routes/public/events.js";
 import abstractSubmitRoutes from "./routes/public/abstracts/submit.js";
@@ -273,6 +274,7 @@ fastify.register(async (protectedRoutes) => {
   protectedRoutes.register(backofficeInvitationLetterRoutes, { prefix: "/orders" });
   protectedRoutes.register(backofficeEmailRetrosendRoutes, { prefix: "/email-retrosend" });
   protectedRoutes.register(backofficeEmailManualRoutes, { prefix: "/email-manual" });
+  protectedRoutes.register(backofficeCertificatesRoutes, { prefix: "/certificates" });
 }, { prefix: "/api/backoffice" });
 
 // ============================================================================

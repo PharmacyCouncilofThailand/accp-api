@@ -1,0 +1,305 @@
+[
+  {
+    "code": "participation",
+    "name": "Certificate of Participation",
+    "pdfFile": "participation.pdf",
+    "nameLabel": "PRESENTED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 302.5,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈296.9). Was 300."
+    },
+    "dbSource": {
+      "enabled": true,
+      "sourceType": "registration",
+      "defaultFilters": {
+        "checkedIn": true
+      }
+    }
+  },
+  {
+    "code": "oral-presentation",
+    "name": "Certificate of Oral Presentation",
+    "pdfFile": "oral-presentation.pdf",
+    "nameLabel": "PRESENTED BY",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 287,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈281.4). Was 283."
+    },
+    "dbSource": {
+      "enabled": true,
+      "sourceType": "abstract",
+      "defaultFilters": {
+        "presentationType": "oral",
+        "status": "accepted"
+      }
+    }
+  },
+  {
+    "code": "poster-presentation",
+    "name": "Certificate of Poster Presentation",
+    "pdfFile": "poster-presentation.pdf",
+    "nameLabel": "PRESENTED BY",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 287,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈281.4). Was 284."
+    },
+    "dbSource": {
+      "enabled": true,
+      "sourceType": "abstract",
+      "defaultFilters": {
+        "presentationType": "poster",
+        "status": "accepted"
+      }
+    }
+  },
+  {
+    "code": "appreciation-pr",
+    "name": "Certificate of Appreciation (PR)",
+    "pdfFile": "appreciation-pr.pdf",
+    "nameLabel": "PRESENTED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 308.9,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈303.4). Was 307."
+    },
+    "dbSource": {
+      "enabled": false,
+      "sourceType": "manual"
+    }
+  },
+  {
+    "code": "best-poster-silver",
+    "name": "Best Poster Presentation — Silver Award",
+    "pdfFile": "best-poster-silver.pdf",
+    "nameLabel": "AWARDED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 249.1,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈243.6). Was 247."
+    },
+    "dbSource": {
+      "enabled": false,
+      "sourceType": "manual"
+    }
+  },
+  {
+    "code": "best-poster-gold",
+    "name": "Best Poster Presentation — Gold Award",
+    "pdfFile": "best-poster-gold.pdf",
+    "nameLabel": "AWARDED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 249.1,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈243.6). Was 246."
+    },
+    "dbSource": {
+      "enabled": false,
+      "sourceType": "manual"
+    }
+  },
+  {
+    "code": "best-oral-gold",
+    "name": "Best Oral Presentation — Gold Award",
+    "pdfFile": "best-oral-gold.pdf",
+    "nameLabel": "AWARDED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 249.1,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈243.6). Was 248."
+    },
+    "dbSource": {
+      "enabled": false,
+      "sourceType": "manual"
+    }
+  },
+  {
+    "code": "best-oral-silver",
+    "name": "Best Oral Presentation — Silver Award",
+    "pdfFile": "best-oral-silver.pdf",
+    "nameLabel": "AWARDED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 249.1,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈243.6). Was 250."
+    },
+    "dbSource": {
+      "enabled": false,
+      "sourceType": "manual"
+    }
+  },
+  {
+    "code": "oral-evaluator",
+    "name": "Certificate of Oral Presentation Evaluator",
+    "pdfFile": "oral-evaluator.pdf",
+    "nameLabel": "PRESENTED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 283,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈277.5). Was 280."
+    },
+    "dbSource": {
+      "enabled": true,
+      "sourceType": "reviewer",
+      "defaultFilters": {
+        "role": "reviewer"
+      }
+    }
+  },
+  {
+    "code": "poster-evaluator",
+    "name": "Certificate of Poster Presentation Evaluator",
+    "pdfFile": "poster-evaluator.pdf",
+    "nameLabel": "PRESENTED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 283,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Match poster-presentation (y=284): name ON rule line (+3pt). Rule pdfY≈277. Do NOT float above line (y=296 was wrong +18pt)."
+    },
+    "dbSource": {
+      "enabled": true,
+      "sourceType": "reviewer",
+      "defaultFilters": {
+        "role": "reviewer"
+      }
+    }
+  },
+  {
+    "code": "appreciation-sponsor",
+    "name": "Certificate of Appreciation (Sponsor)",
+    "pdfFile": "appreciation-sponsor.pdf",
+    "nameLabel": "PRESENTED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 308.9,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈303.4). Was 306."
+    },
+    "dbSource": {
+      "enabled": false,
+      "sourceType": "manual"
+    }
+  },
+  {
+    "code": "appreciation-organizing-committee",
+    "name": "Certificate of Appreciation (Organizing Committee)",
+    "pdfFile": "appreciation-organizing-committee.pdf",
+    "nameLabel": "PRESENTED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 308.9,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈303.4). Was 306."
+    },
+    "dbSource": {
+      "enabled": false,
+      "sourceType": "manual"
+    }
+  },
+  {
+    "code": "appreciation-speaker",
+    "name": "Certificate of Appreciation (Speaker)",
+    "pdfFile": "appreciation-speaker.pdf",
+    "nameLabel": "PRESENTED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 308.9,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈303.4). Was 307."
+    },
+    "dbSource": {
+      "enabled": true,
+      "sourceType": "speaker",
+      "defaultFilters": {}
+    }
+  },
+  {
+    "code": "appreciation-session-moderator",
+    "name": "Certificate of Appreciation (Session Moderator)",
+    "pdfFile": "appreciation-session-moderator.pdf",
+    "nameLabel": "PRESENTED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 308.9,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈303.4). Was 306."
+    },
+    "dbSource": {
+      "enabled": false,
+      "sourceType": "manual"
+    }
+  },
+  {
+    "code": "appreciation-ceremony-performances",
+    "name": "Certificate of Appreciation (Ceremony & Performances)",
+    "pdfFile": "appreciation-ceremony-performances.pdf",
+    "nameLabel": "PRESENTED TO",
+    "namePlacement": {
+      "x": 368.5,
+      "y": 308.9,
+      "maxWidth": 600,
+      "defaultFontSize": 26,
+      "minFontSize": 20,
+      "align": "center",
+      "_calibrationNote": "Unified gap with poster-evaluator (y=283): baseline +5.5pt above rule (rulePdfY≈303.4). Was 306."
+    },
+    "dbSource": {
+      "enabled": false,
+      "sourceType": "manual"
+    }
+  }
+]
