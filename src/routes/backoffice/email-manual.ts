@@ -39,7 +39,7 @@ import {
   buildPresentationScheduleNotificationEmailContent,
   buildEmailHtmlFromText,
   buildParticipationCertificateEmailContent,
-  sendCertificateDeliveryEmail,
+  sendParticipationCertificateEmail,
 } from "../../services/emailService.js";
 import { generateReceiptToken } from "../../utils/receiptToken.js";
 import { buildChargeNote, resolveChargeDisplay } from "../../utils/alipayCharge.js";
@@ -1561,10 +1561,13 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               await delay(EMAIL_SEND_DELAY_MS);
 
               const mailStartedAt = Date.now();
-              await sendCertificateDeliveryEmail(reg.email.trim(), content.subject, content.html, {
-                content: buffer,
-                fileName,
-              });
+              await sendParticipationCertificateEmail(
+                reg.email.trim(),
+                recipientParts.firstName,
+                recipientParts.middleName,
+                recipientParts.lastName,
+                { content: buffer, fileName },
+              );
               const mailElapsedMs = Date.now() - mailStartedAt;
               fastify.log.info(
                 `email-manual: participation-certificate sent | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | nameOnCert="${certificateName}" | fileName=${fileName} | pdfBytes=${buffer.length} | pdfMs=${pdfElapsedMs} | mailMs=${mailElapsedMs} | status=sent`,

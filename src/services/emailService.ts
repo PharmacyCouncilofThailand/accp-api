@@ -1546,6 +1546,9 @@ export async function sendPresentationScheduleNotificationEmail(
  * Send contact form email to conference organizers
  * Email will be sent to accpbangkok2026@gmail.com with Reply-To set to user's email
  */
+/**
+ * Send certificate PDF with HTML body (Certificate Center — may use styled wrap).
+ */
 export async function sendCertificateDeliveryEmail(
   recipient: string,
   subject: string,
@@ -1558,27 +1561,52 @@ export async function sendCertificateDeliveryEmail(
   await sendNipaMailHtml(recipient, subject, html, [attachment]);
 }
 
-/** Manual Email — Participation Certificate (plaintext, same pattern as other templates). */
-export function buildParticipationCertificateEmailContent(
+/** Manual Email — Participation Certificate plaintext (same pattern as payment / approval-request). */
+export function buildParticipationCertificatePlainText(
   firstName: string,
   middleName: string | null | undefined,
   lastName: string,
-): { subject: string; html: string } {
-  const plainText = [
+): string {
+  return [
     `Dear ${getFullName(firstName, middleName, lastName)},`,
     ``,
     `Please find attached your Certificate of Participation for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).`,
     ``,
     `Thank you for joining us in Bangkok.`,
     ``,
-    `Best regards,`,
-    `ACCP 2026 Organizing Committee`,
+    `Sincerely,`,
+    `25th ACCP committee`,
+    `Bangkok Thailand`,
   ].join("\n");
+}
 
+export function buildParticipationCertificateEmailContent(
+  firstName: string,
+  middleName: string | null | undefined,
+  lastName: string,
+): { subject: string; html: string; plainText: string } {
+  const plainText = buildParticipationCertificatePlainText(firstName, middleName, lastName);
   return {
-    subject: "Your Certificate of Participation — ACCP 2026",
-    html: buildEmailHtmlFromText(plainText),
+    subject: "Your Certificate of Participation - 25th ACCP 2026",
+    // Preview: convert plaintext → <br> only (same as sendNipaMailEmail), no card/footer shell
+    html: plainText
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br>\n"),
+    plainText,
   };
+}
+
+export async function sendParticipationCertificateEmail(
+  email: string,
+  firstName: string,
+  middleName: string | null | undefined,
+  lastName: string,
+  attachment: EmailAttachment,
+): Promise<void> {
+  const content = buildParticipationCertificateEmailContent(firstName, middleName, lastName);
+  await sendNipaMailEmail(email, content.subject, content.plainText, [attachment]);
 }
 
 export async function sendContactFormEmail(
