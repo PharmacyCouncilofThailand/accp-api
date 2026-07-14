@@ -1558,6 +1558,29 @@ export async function sendCertificateDeliveryEmail(
   await sendNipaMailHtml(recipient, subject, html, [attachment]);
 }
 
+/** Manual Email — Participation Certificate (plaintext, same pattern as other templates). */
+export function buildParticipationCertificateEmailContent(
+  firstName: string,
+  middleName: string | null | undefined,
+  lastName: string,
+): { subject: string; html: string } {
+  const plainText = [
+    `Dear ${getFullName(firstName, middleName, lastName)},`,
+    ``,
+    `Please find attached your Certificate of Participation for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).`,
+    ``,
+    `Thank you for joining us in Bangkok.`,
+    ``,
+    `Best regards,`,
+    `ACCP 2026 Organizing Committee`,
+  ].join("\n");
+
+  return {
+    subject: "Your Certificate of Participation — ACCP 2026",
+    html: buildEmailHtmlFromText(plainText),
+  };
+}
+
 export async function sendContactFormEmail(
   name: string,
   email: string,

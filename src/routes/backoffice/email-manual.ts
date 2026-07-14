@@ -38,10 +38,16 @@ import {
   buildAcademicAcceptanceEmailContent,
   buildPresentationScheduleNotificationEmailContent,
   buildEmailHtmlFromText,
+  buildParticipationCertificateEmailContent,
+  sendCertificateDeliveryEmail,
 } from "../../services/emailService.js";
 import { generateReceiptToken } from "../../utils/receiptToken.js";
 import { buildChargeNote, resolveChargeDisplay } from "../../utils/alipayCharge.js";
 import { getFullName } from "../../utils/name.js";
+import {
+  isEnglishLatinRegistrationName,
+  toParticipationCertificateNameParts,
+} from "../../utils/englishName.js";
 import {
   buildAbstractScheduleResponse,
   buildScheduleDetailLines,
@@ -55,6 +61,8 @@ import {
   formatIssueDate,
   titleCasePresentationType,
 } from "../../services/letter.service.js";
+import { generateCertificatePdf } from "../../services/certificatePdf.service.js";
+import { buildCertificateFilename, formatCertificateName } from "../../utils/certificateName.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Template configuration
@@ -132,6 +140,13 @@ const TEMPLATE_CONFIG = {
     recipientType: "abstract" as const,
     requiresComment: false,
     description: "Notify accepted presenters of their room or poster board assignment (with schedule PDF attached)",
+  },
+  "participation-certificate": {
+    label: "Participation Certificate",
+    recipientType: "registration" as const,
+    requiresComment: false,
+    description:
+      "Certificate of Participation PDF for confirmed registrations with English names (from registrations table)",
   },
 } as const;
 
@@ -312,6 +327,69 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
       templates: Object.entries(TEMPLATE_CONFIG).map(([id, cfg]) => ({ id, ...cfg })),
     });
   });
+
+  // GET /participation-certificate/:id.pdf — preview personalized PDF (auth required)
+  fastify.get<{ Params: { id: string } }>(
+    "/participation-certificate/:id.pdf",
+    async (request, reply) => {
+      const numId = parseInt(request.params.id, 10);
+      if (isNaN(numId)) {
+        return reply.status(400).send({ success: false, error: "Invalid registration id" });
+      }
+
+      try {
+        const [reg] = await db
+          .select({
+            firstName: registrations.firstName,
+            middleName: registrations.middleName,
+            lastName: registrations.lastName,
+            email: registrations.email,
+            status: registrations.status,
+          })
+          .from(registrations)
+          .where(eq(registrations.id, numId))
+          .limit(1);
+
+        if (!reg) {
+          return reply.status(404).send({ success: false, error: "Registration not found" });
+        }
+        if (reg.status !== "confirmed") {
+          return reply.status(400).send({ success: false, error: "Registration is not confirmed" });
+        }
+        if (!isEnglishLatinRegistrationName(reg.firstName, reg.middleName, reg.lastName)) {
+          return reply.status(400).send({
+            success: false,
+            error: "Name must be English (Latin letters) for this certificate template",
+          });
+        }
+
+        const recipientParts = toParticipationCertificateNameParts({
+          firstName: reg.firstName,
+          middleName: reg.middleName,
+          lastName: reg.lastName,
+        });
+        const certificateName = formatCertificateName(recipientParts);
+        const fileName = buildCertificateFilename("participation", recipientParts);
+
+        fastify.log.info(
+          `email-manual: participation-certificate PDF preview | regId=${numId} | email=${reg.email} | nameOnCert="${certificateName}" | fileName=${fileName} | generating…`,
+        );
+        const startedAt = Date.now();
+        const { buffer } = await generateCertificatePdf("participation", recipientParts);
+        fastify.log.info(
+          `email-manual: participation-certificate PDF preview ready | regId=${numId} | nameOnCert="${certificateName}" | fileName=${fileName} | size=${buffer.length} bytes | elapsed=${Date.now() - startedAt}ms`,
+        );
+
+        return reply
+          .header("Content-Type", "application/pdf")
+          .header("Content-Disposition", `inline; filename="${fileName}"`)
+          .send(buffer);
+      } catch (err) {
+        fastify.log.error(err, "email-manual participation-certificate PDF error");
+        return reply.status(500).send({ success: false, error: "Failed to generate certificate PDF" });
+      }
+    },
+  );
 
   // GET /search?type=user|order|registration|abstract&q=<search>
   fastify.get("/search", async (request, reply) => {
@@ -589,28 +667,67 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
         }));
 
       } else if (cfg.recipientType === "registration") {
-        const rows = await db
-          .select({
-            id: registrations.id, regCode: registrations.regCode,
-            firstName: registrations.firstName, middleName: registrations.middleName, lastName: registrations.lastName,
-            email: registrations.email, status: registrations.status,
-          })
-          .from(registrations)
-          .where(search ? or(
-            ilike(registrations.regCode, `%${search}%`),
-            ilike(registrations.email, `%${search}%`),
-            ilike(registrations.firstName, `%${search}%`),
-            ilike(registrations.lastName, `%${search}%`),
-          ) : undefined)
-          .limit(MAX);
+        const searchCond = search
+          ? or(
+              ilike(registrations.regCode, `%${search}%`),
+              ilike(registrations.email, `%${search}%`),
+              ilike(registrations.firstName, `%${search}%`),
+              ilike(registrations.lastName, `%${search}%`),
+            )
+          : undefined;
 
-        recipients = rows.map((r) => ({
-          id: r.id,
-          label: r.regCode,
-          email: r.email,
-          detail: getFullName(r.firstName, r.middleName, r.lastName),
-          tag: r.status as string,
-        }));
+        if (template === "participation-certificate") {
+          const rows = await db
+            .select({
+              id: registrations.id,
+              regCode: registrations.regCode,
+              firstName: registrations.firstName,
+              middleName: registrations.middleName,
+              lastName: registrations.lastName,
+              email: registrations.email,
+              status: registrations.status,
+            })
+            .from(registrations)
+            .where(
+              and(
+                eq(registrations.status, "confirmed" as any),
+                sql`trim(${registrations.email}) <> ''`,
+                searchCond,
+              ),
+            )
+            .limit(2000);
+
+          recipients = rows
+            .filter((r) =>
+              isEnglishLatinRegistrationName(r.firstName, r.middleName, r.lastName),
+            )
+            .slice(0, MAX)
+            .map((r) => ({
+              id: r.id,
+              label: r.regCode,
+              email: r.email,
+              detail: getFullName(r.firstName, r.middleName, r.lastName),
+              tag: r.status as string,
+            }));
+        } else {
+          const rows = await db
+            .select({
+              id: registrations.id, regCode: registrations.regCode,
+              firstName: registrations.firstName, middleName: registrations.middleName, lastName: registrations.lastName,
+              email: registrations.email, status: registrations.status,
+            })
+            .from(registrations)
+            .where(searchCond)
+            .limit(MAX);
+
+          recipients = rows.map((r) => ({
+            id: r.id,
+            label: r.regCode,
+            email: r.email,
+            detail: getFullName(r.firstName, r.middleName, r.lastName),
+            tag: r.status as string,
+          }));
+        }
       }
 
       return reply.send({ success: true, recipients, total: recipients.length });
@@ -898,6 +1015,55 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
         );
         return reply.send({ success: true, to: reg.email, ...content });
 
+      } else if (template === "participation-certificate") {
+        const [reg] = await db
+          .select({
+            id: registrations.id,
+            regCode: registrations.regCode,
+            firstName: registrations.firstName,
+            middleName: registrations.middleName,
+            lastName: registrations.lastName,
+            email: registrations.email,
+            status: registrations.status,
+          })
+          .from(registrations)
+          .where(eq(registrations.id, numId))
+          .limit(1);
+        if (!reg) return reply.status(404).send({ success: false, error: "Registration not found" });
+        if (reg.status !== "confirmed") {
+          return reply.status(400).send({ success: false, error: "Registration is not confirmed" });
+        }
+        if (!reg.email?.trim()) {
+          return reply.status(400).send({ success: false, error: "Registration has no email" });
+        }
+        if (!isEnglishLatinRegistrationName(reg.firstName, reg.middleName, reg.lastName)) {
+          return reply.status(400).send({
+            success: false,
+            error: "Name must be English (Latin letters) for this certificate template",
+          });
+        }
+
+        const nameParts = toParticipationCertificateNameParts({
+          firstName: reg.firstName,
+          middleName: reg.middleName,
+          lastName: reg.lastName,
+        });
+        const content = buildParticipationCertificateEmailContent(
+          nameParts.firstName,
+          nameParts.middleName,
+          nameParts.lastName,
+        );
+        const fileName = buildCertificateFilename("participation", nameParts);
+        return reply.send({
+          success: true,
+          to: reg.email,
+          ...content,
+          attachment: {
+            fileName,
+            downloadUrl: `${getPublicApiBaseUrl()}/api/backoffice/email-manual/participation-certificate/${numId}.pdf`,
+          },
+        });
+
       } else {
         return reply.status(400).send({ success: false, error: `Unknown template: ${template}` });
       }
@@ -929,9 +1095,20 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
     const results: ManualEmailResult[] = [];
     let delayBeforeNextSend = false;
 
+    if (template === "participation-certificate") {
+      fastify.log.info(
+        `email-manual: participation-certificate batch start | dryRun=${Boolean(dryRun)} | recipientCount=${uniqueIds.length} | ids=[${uniqueIds.slice(0, 20).join(",")}${uniqueIds.length > 20 ? ",…" : ""}]`,
+      );
+    }
+
     try {
       for (const id of uniqueIds) {
         if (delayBeforeNextSend) {
+          if (template === "participation-certificate") {
+            fastify.log.info(
+              `email-manual: participation-certificate delay ${EMAIL_SEND_DELAY_MS}ms after previous send before next PDF generate`,
+            );
+          }
           await delay(EMAIL_SEND_DELAY_MS);
           delayBeforeNextSend = false;
         }
@@ -1303,6 +1480,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               id: registrations.id, regCode: registrations.regCode,
               firstName: registrations.firstName, middleName: registrations.middleName, lastName: registrations.lastName,
               email: registrations.email, ticketTypeId: registrations.ticketTypeId, eventId: registrations.eventId,
+              status: registrations.status,
             })
             .from(registrations).where(eq(registrations.id, id)).limit(1);
 
@@ -1313,29 +1491,122 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
 
           const fullName = getFullName(reg.firstName, reg.middleName, reg.lastName);
 
-          if (dryRun) {
-            results.push({ id, email: reg.email, name: fullName, type: template, status: "pending", reason: reg.regCode });
-            continue;
-          }
+          if (template === "participation-certificate") {
+            if (reg.status !== "confirmed") {
+              fastify.log.info(
+                `email-manual: participation-certificate skipped | regId=${id} | regCode=${reg.regCode} | reason=status "${reg.status}"`,
+              );
+              results.push({
+                id, email: reg.email, name: fullName, type: template,
+                status: "skipped", reason: `Registration status is "${reg.status}"`,
+              });
+              continue;
+            }
+            if (!reg.email?.trim()) {
+              fastify.log.info(
+                `email-manual: participation-certificate skipped | regId=${id} | regCode=${reg.regCode} | reason=no email`,
+              );
+              results.push({
+                id, email: "—", name: fullName, type: template,
+                status: "skipped", reason: "Registration has no email",
+              });
+              continue;
+            }
+            if (!isEnglishLatinRegistrationName(reg.firstName, reg.middleName, reg.lastName)) {
+              fastify.log.info(
+                `email-manual: participation-certificate skipped | regId=${id} | regCode=${reg.regCode} | name="${fullName}" | reason=name not English`,
+              );
+              results.push({
+                id, email: reg.email, name: fullName, type: template,
+                status: "skipped", reason: "Name is not English (Latin letters)",
+              });
+              continue;
+            }
 
-          try {
-            const [ticket] = await db.select({ name: ticketTypes.name }).from(ticketTypes).where(eq(ticketTypes.id, reg.ticketTypeId)).limit(1);
-            const [event] = await db.select({ eventName: events.eventName }).from(events).where(eq(events.id, reg.eventId)).limit(1);
-            const regSessionRows = await db
-              .select({ sessionName: sessions.sessionName, startTime: sessions.startTime, endTime: sessions.endTime })
-              .from(registrationSessions)
-              .innerJoin(sessions, eq(registrationSessions.sessionId, sessions.id))
-              .where(eq(registrationSessions.registrationId, id));
+            if (dryRun) {
+              fastify.log.info(
+                `email-manual: participation-certificate dry-run | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | name="${fullName}"`,
+              );
+              results.push({ id, email: reg.email, name: fullName, type: template, status: "pending", reason: reg.regCode });
+              continue;
+            }
 
-            await sendManualRegistrationEmail(
-              reg.email, reg.firstName, reg.middleName, reg.lastName, reg.regCode,
-              event?.eventName ?? "Conference", ticket?.name ?? "Ticket",
-              regSessionRows.map((s) => ({ sessionName: s.sessionName, startTime: s.startTime, endTime: s.endTime })),
-            );
-            results.push({ id, email: reg.email, name: fullName, type: template, status: "sent" });
-          } catch (err) {
-            fastify.log.error(err, `email-manual: failed to send manual-registration for reg ${id}`);
-            results.push({ id, email: reg.email, name: fullName, type: template, status: "failed", reason: String(err) });
+            try {
+              const recipientParts = toParticipationCertificateNameParts({
+                firstName: reg.firstName,
+                middleName: reg.middleName,
+                lastName: reg.lastName,
+              });
+              const certificateName = formatCertificateName(recipientParts);
+              const fileName = buildCertificateFilename("participation", recipientParts);
+              const content = buildParticipationCertificateEmailContent(
+                recipientParts.firstName,
+                recipientParts.middleName,
+                recipientParts.lastName,
+              );
+
+              fastify.log.info(
+                `email-manual: participation-certificate generate PDF | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | dbName="${fullName}" | nameOnCert="${certificateName}" | fileName=${fileName} | subject="${content.subject}"`,
+              );
+              const pdfStartedAt = Date.now();
+              const { buffer } = await generateCertificatePdf("participation", recipientParts);
+              const pdfElapsedMs = Date.now() - pdfStartedAt;
+              fastify.log.info(
+                `email-manual: participation-certificate PDF ready | regId=${id} | regCode=${reg.regCode} | fileName=${fileName} | size=${buffer.length} bytes | elapsed=${pdfElapsedMs}ms`,
+              );
+
+              fastify.log.info(
+                `email-manual: participation-certificate delay ${EMAIL_SEND_DELAY_MS}ms after PDF before send | regId=${id}`,
+              );
+              await delay(EMAIL_SEND_DELAY_MS);
+
+              const mailStartedAt = Date.now();
+              await sendCertificateDeliveryEmail(reg.email.trim(), content.subject, content.html, {
+                content: buffer,
+                fileName,
+              });
+              const mailElapsedMs = Date.now() - mailStartedAt;
+              fastify.log.info(
+                `email-manual: participation-certificate sent | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | nameOnCert="${certificateName}" | fileName=${fileName} | pdfBytes=${buffer.length} | pdfMs=${pdfElapsedMs} | mailMs=${mailElapsedMs} | status=sent`,
+              );
+              results.push({ id, email: reg.email, name: fullName, type: template, status: "sent" });
+              // Post-send 700ms wait is handled by delayBeforeNextSend at the top of the next loop iteration.
+            } catch (err) {
+              fastify.log.error(
+                { err },
+                `email-manual: participation-certificate failed | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | name="${fullName}"`,
+              );
+              results.push({
+                id, email: reg.email, name: fullName, type: template,
+                status: "failed", reason: String(err),
+              });
+            }
+            // fall through to delay tracking below
+          } else {
+            if (dryRun) {
+              results.push({ id, email: reg.email, name: fullName, type: template, status: "pending", reason: reg.regCode });
+              continue;
+            }
+
+            try {
+              const [ticket] = await db.select({ name: ticketTypes.name }).from(ticketTypes).where(eq(ticketTypes.id, reg.ticketTypeId)).limit(1);
+              const [event] = await db.select({ eventName: events.eventName }).from(events).where(eq(events.id, reg.eventId)).limit(1);
+              const regSessionRows = await db
+                .select({ sessionName: sessions.sessionName, startTime: sessions.startTime, endTime: sessions.endTime })
+                .from(registrationSessions)
+                .innerJoin(sessions, eq(registrationSessions.sessionId, sessions.id))
+                .where(eq(registrationSessions.registrationId, id));
+
+              await sendManualRegistrationEmail(
+                reg.email, reg.firstName, reg.middleName, reg.lastName, reg.regCode,
+                event?.eventName ?? "Conference", ticket?.name ?? "Ticket",
+                regSessionRows.map((s) => ({ sessionName: s.sessionName, startTime: s.startTime, endTime: s.endTime })),
+              );
+              results.push({ id, email: reg.email, name: fullName, type: template, status: "sent" });
+            } catch (err) {
+              fastify.log.error(err, `email-manual: failed to send manual-registration for reg ${id}`);
+              results.push({ id, email: reg.email, name: fullName, type: template, status: "failed", reason: String(err) });
+            }
           }
         }
 
@@ -1343,6 +1614,11 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           const last = results[results.length - 1];
           if (last.status === "sent" || last.status === "failed") {
             delayBeforeNextSend = true;
+            if (template === "participation-certificate") {
+              fastify.log.info(
+                `email-manual: participation-certificate will delay ${EMAIL_SEND_DELAY_MS}ms before next PDF generate | lastRegId=${last.id} | lastStatus=${last.status}`,
+              );
+            }
           }
         }
       }
@@ -1353,6 +1629,12 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
         skipped: results.filter((r) => r.status === "skipped").length,
         failed: results.filter((r) => r.status === "failed").length,
       };
+
+      if (template === "participation-certificate") {
+        fastify.log.info(
+          `email-manual: participation-certificate batch done | dryRun=${Boolean(dryRun)} | sent=${summary.sent} | failed=${summary.failed} | skipped=${summary.skipped} | pending=${summary.pending} | total=${results.length}`,
+        );
+      }
 
       return reply.send({ success: true, dryRun, template, results, summary });
     } catch (err) {
