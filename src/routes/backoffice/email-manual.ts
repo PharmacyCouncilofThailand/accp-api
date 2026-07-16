@@ -40,6 +40,8 @@ import {
   buildEmailHtmlFromText,
   buildParticipationCertificateEmailContent,
   sendParticipationCertificateEmail,
+  buildConferenceEvaluationSurveyEmailContent,
+  sendConferenceEvaluationSurveyEmail,
   buildUploadCertificateEmailContent,
   sendUploadCertificateEmail,
 } from "../../services/emailService.js";
@@ -162,6 +164,13 @@ const TEMPLATE_CONFIG = {
     description:
       "Certificate of Participation PDF for confirmed registrations with non-English names (from registrations table)",
   },
+  "conference-evaluation-survey": {
+    label: "Conference Evaluation Survey",
+    recipientType: "registration" as const,
+    requiresComment: false,
+    description:
+      "Evaluation form request for all confirmed registrations (purchase + manual, all names, no PDF attachment)",
+  },
   "best-oral-silver-certificate": {
     label: "Best Oral Presentation — Silver",
     recipientType: "upload" as const,
@@ -233,6 +242,10 @@ const PARTICIPATION_CERTIFICATE_TEMPLATES = new Set<string>([
 
 function isParticipationCertificateTemplate(template: string): boolean {
   return PARTICIPATION_CERTIFICATE_TEMPLATES.has(template);
+}
+
+function isConferenceEvaluationSurveyTemplate(template: string): boolean {
+  return template === "conference-evaluation-survey";
 }
 
 function matchesParticipationCertificateNameFilter(
@@ -891,7 +904,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
   });
 
   // GET /recipients?template=...&q=...
-  // Returns all recipients pre-filtered for the given template (up to 500 rows)
+  // Returns all recipients pre-filtered for the given template
   fastify.get("/recipients", async (request, reply) => {
     const { template, q } = request.query as { template?: string; q?: string };
     if (!template) return reply.status(400).send({ success: false, error: "template is required" });
@@ -900,6 +913,8 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
 
     const search = (q ?? "").trim();
     const MAX = 500;
+    /** Confirmed registrations (certificates / survey) — return full list, not capped at 500. */
+    const CONFIRMED_REGISTRATION_BULK_MAX = 5000;
 
     try {
       type RecRow = { id: number; label: string; email: string; detail: string; tag: string };
@@ -1048,7 +1063,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
             )
           : undefined;
 
-        if (isParticipationCertificateTemplate(template)) {
+        if (isParticipationCertificateTemplate(template) || isConferenceEvaluationSurveyTemplate(template)) {
           const rows = await db
             .select({
               id: registrations.id,
@@ -1067,25 +1082,36 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
                 searchCond,
               ),
             )
-            .limit(2000);
+            .limit(CONFIRMED_REGISTRATION_BULK_MAX);
 
-          recipients = rows
-            .filter((r) =>
-              matchesParticipationCertificateNameFilter(
-                template,
-                r.firstName,
-                r.middleName,
-                r.lastName,
-              ),
-            )
-            .slice(0, MAX)
-            .map((r) => ({
-              id: r.id,
-              label: r.regCode,
-              email: r.email,
-              detail: getFullName(r.firstName, r.middleName, r.lastName),
-              tag: r.status as string,
-            }));
+          const mapped = rows.map((r) => ({
+            id: r.id,
+            label: r.regCode,
+            email: r.email,
+            detail: getFullName(r.firstName, r.middleName, r.lastName),
+            tag: r.status as string,
+          }));
+
+          if (isParticipationCertificateTemplate(template)) {
+            recipients = rows
+              .filter((r) =>
+                matchesParticipationCertificateNameFilter(
+                  template,
+                  r.firstName,
+                  r.middleName,
+                  r.lastName,
+                ),
+              )
+              .map((r) => ({
+                id: r.id,
+                label: r.regCode,
+                email: r.email,
+                detail: getFullName(r.firstName, r.middleName, r.lastName),
+                tag: r.status as string,
+              }));
+          } else {
+            recipients = mapped;
+          }
         } else {
           const rows = await db
             .select({
@@ -1474,6 +1500,27 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
             downloadUrl: `${getPublicApiBaseUrl()}/api/backoffice/email-manual/participation-certificate/${numId}.pdf`,
           },
         });
+
+      } else if (isConferenceEvaluationSurveyTemplate(template)) {
+        const [reg] = await db
+          .select({
+            id: registrations.id,
+            regCode: registrations.regCode,
+            email: registrations.email,
+            status: registrations.status,
+          })
+          .from(registrations)
+          .where(eq(registrations.id, numId))
+          .limit(1);
+        if (!reg) return reply.status(404).send({ success: false, error: "Registration not found" });
+        if (reg.status !== "confirmed") {
+          return reply.status(400).send({ success: false, error: "Registration is not confirmed" });
+        }
+        if (!reg.email?.trim()) {
+          return reply.status(400).send({ success: false, error: "Registration has no email" });
+        }
+        const content = buildConferenceEvaluationSurveyEmailContent();
+        return reply.send({ success: true, to: reg.email, ...content });
 
       } else {
         return reply.status(400).send({ success: false, error: `Unknown template: ${template}` });
@@ -2015,6 +2062,40 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               });
             }
             // fall through to delay tracking below
+          } else if (isConferenceEvaluationSurveyTemplate(template)) {
+            if (reg.status !== "confirmed") {
+              results.push({
+                id, email: reg.email, name: fullName, type: template,
+                status: "skipped", reason: `Registration status is "${reg.status}"`,
+              });
+              continue;
+            }
+            if (!reg.email?.trim()) {
+              results.push({
+                id, email: "—", name: fullName, type: template,
+                status: "skipped", reason: "Registration has no email",
+              });
+              continue;
+            }
+
+            if (dryRun) {
+              results.push({ id, email: reg.email, name: fullName, type: template, status: "pending", reason: reg.regCode });
+              continue;
+            }
+
+            try {
+              await sendConferenceEvaluationSurveyEmail(reg.email.trim());
+              results.push({ id, email: reg.email, name: fullName, type: template, status: "sent" });
+            } catch (err) {
+              fastify.log.error(
+                { err },
+                `email-manual: ${template} failed | regId=${id} | regCode=${reg.regCode} | to=${reg.email}`,
+              );
+              results.push({
+                id, email: reg.email, name: fullName, type: template,
+                status: "failed", reason: String(err),
+              });
+            }
           } else {
             if (dryRun) {
               results.push({ id, email: reg.email, name: fullName, type: template, status: "pending", reason: reg.regCode });

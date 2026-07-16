@@ -1609,6 +1609,58 @@ export async function sendParticipationCertificateEmail(
   await sendNipaMailEmail(email, content.subject, content.plainText, [attachment]);
 }
 
+const CONFERENCE_EVALUATION_SURVEY_URL =
+  "https://docs.google.com/forms/d/e/1FAIpQLSeEPR2prV93aZYQUgSyKxtwnuTYpcf81gxo1R6TusMR5zISfA/viewform?usp=dialog";
+
+/** Manual Email — post-conference evaluation survey (generic greeting, no attachment). */
+export function buildConferenceEvaluationSurveyPlainText(): string {
+  return [
+    "Dear Attendees,",
+    "",
+    "Thank you for participating in The 25th Asian Conference on Clinical Pharmacy.",
+    "",
+    "It was an honor to have you join us, and we hope you found the sessions valuable and engaging.",
+    "",
+    "To help us continuously improve and better serve our international community in future events, we would highly appreciate it if you could take a few moments to complete our short evaluation form.",
+    "",
+    "Your insights and feedback are incredibly valuable to our organizing committee.",
+    "",
+    CONFERENCE_EVALUATION_SURVEY_URL,
+    "",
+    "The form will remain open until July 24, 2026.",
+    "",
+    "If you have already submitted your feedback, please accept our sincere thanks for your time.",
+    "",
+    "Thank you once again for your support, and we look forward to welcoming you to our future conferences.",
+    "",
+    "Warm regards,",
+    "25th ACCP committee",
+    "Bangkok Thailand",
+  ].join("\n");
+}
+
+export function buildConferenceEvaluationSurveyEmailContent(): {
+  subject: string;
+  html: string;
+  plainText: string;
+} {
+  const plainText = buildConferenceEvaluationSurveyPlainText();
+  return {
+    subject: "Share Your Feedback - 25th ACCP 2026",
+    html: plainText
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br>\n"),
+    plainText,
+  };
+}
+
+export async function sendConferenceEvaluationSurveyEmail(email: string): Promise<void> {
+  const content = buildConferenceEvaluationSurveyEmailContent();
+  await sendNipaMailEmail(email, content.subject, content.plainText);
+}
+
 /** Manual Email — CSV upload certificate plaintext (same pattern as participation). */
 export function buildUploadCertificatePlainText(
   fullName: string,
