@@ -1567,7 +1567,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
     const results: ManualEmailResult[] = [];
     let delayBeforeNextSend = false;
 
-    if (isCertificateEmailTemplate(template)) {
+    if (isCertificateEmailTemplate(template) || isConferenceEvaluationSurveyTemplate(template)) {
       fastify.log.info(
         `email-manual: ${template} batch start | dryRun=${Boolean(dryRun)} | recipientCount=${uniqueIds.length} | ids=[${uniqueIds.slice(0, 20).join(",")}${uniqueIds.length > 20 ? ",…" : ""}]`,
       );
@@ -1576,9 +1576,10 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
     try {
       for (const id of uniqueIds) {
         if (delayBeforeNextSend) {
-          if (isCertificateEmailTemplate(template)) {
+          if (isCertificateEmailTemplate(template) || isConferenceEvaluationSurveyTemplate(template)) {
+            const phase = isCertificateEmailTemplate(template) ? "before next PDF generate" : "before next send";
             fastify.log.info(
-              `email-manual: ${template} delay ${EMAIL_SEND_DELAY_MS}ms after previous send before next PDF generate`,
+              `email-manual: ${template} delay ${EMAIL_SEND_DELAY_MS}ms after previous send ${phase}`,
             );
           }
           await delay(EMAIL_SEND_DELAY_MS);
@@ -2079,12 +2080,20 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
             }
 
             if (dryRun) {
+              fastify.log.info(
+                `email-manual: ${template} dry-run | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | name="${fullName}"`,
+              );
               results.push({ id, email: reg.email, name: fullName, type: template, status: "pending", reason: reg.regCode });
               continue;
             }
 
             try {
+              const mailStartedAt = Date.now();
               await sendConferenceEvaluationSurveyEmail(reg.email.trim());
+              const mailElapsedMs = Date.now() - mailStartedAt;
+              fastify.log.info(
+                `email-manual: ${template} sent | regId=${id} | regCode=${reg.regCode} | to=${reg.email} | mailMs=${mailElapsedMs} | status=sent`,
+              );
               results.push({ id, email: reg.email, name: fullName, type: template, status: "sent" });
             } catch (err) {
               fastify.log.error(
@@ -2213,9 +2222,10 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           const last = results[results.length - 1];
           if (last.status === "sent" || last.status === "failed") {
             delayBeforeNextSend = true;
-            if (isCertificateEmailTemplate(template)) {
+            if (isCertificateEmailTemplate(template) || isConferenceEvaluationSurveyTemplate(template)) {
+              const phase = isCertificateEmailTemplate(template) ? "before next PDF generate" : "before next send";
               fastify.log.info(
-                `email-manual: ${template} will delay ${EMAIL_SEND_DELAY_MS}ms before next PDF generate | lastId=${last.id} | lastStatus=${last.status}`,
+                `email-manual: ${template} will delay ${EMAIL_SEND_DELAY_MS}ms ${phase} | lastId=${last.id} | lastStatus=${last.status}`,
               );
             }
           }
@@ -2229,7 +2239,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
         failed: results.filter((r) => r.status === "failed").length,
       };
 
-      if (isCertificateEmailTemplate(template)) {
+      if (isCertificateEmailTemplate(template) || isConferenceEvaluationSurveyTemplate(template)) {
         fastify.log.info(
           `email-manual: ${template} batch done | dryRun=${Boolean(dryRun)} | sent=${summary.sent} | failed=${summary.failed} | skipped=${summary.skipped} | pending=${summary.pending} | total=${results.length}`,
         );
