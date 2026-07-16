@@ -40,6 +40,8 @@ import {
   buildEmailHtmlFromText,
   buildParticipationCertificateEmailContent,
   sendParticipationCertificateEmail,
+  buildUploadCertificateEmailContent,
+  sendUploadCertificateEmail,
 } from "../../services/emailService.js";
 import { generateReceiptToken } from "../../utils/receiptToken.js";
 import { buildChargeNote, resolveChargeDisplay } from "../../utils/alipayCharge.js";
@@ -63,7 +65,11 @@ import {
   titleCasePresentationType,
 } from "../../services/letter.service.js";
 import { generateCertificatePdf } from "../../services/certificatePdf.service.js";
-import { buildCertificateFilename, formatCertificateName } from "../../utils/certificateName.js";
+import { buildCertificateFilename, formatCertificateName, sanitizeCertificateFilenamePart } from "../../utils/certificateName.js";
+import {
+  parseAwardCertificateCsv,
+  toAwardCertificateNameParts,
+} from "../../utils/awardCertificateCsv.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Template configuration
@@ -156,6 +162,66 @@ const TEMPLATE_CONFIG = {
     description:
       "Certificate of Participation PDF for confirmed registrations with non-English names (from registrations table)",
   },
+  "best-oral-silver-certificate": {
+    label: "Best Oral Presentation — Silver",
+    recipientType: "upload" as const,
+    requiresComment: false,
+    description: "Upload CSV (Fullname, Email) → generate & email Best Oral Silver award certificate",
+  },
+  "best-oral-gold-certificate": {
+    label: "Best Oral Presentation — Gold",
+    recipientType: "upload" as const,
+    requiresComment: false,
+    description: "Upload CSV (Fullname, Email) → generate & email Best Oral Gold award certificate",
+  },
+  "best-poster-silver-certificate": {
+    label: "Best Poster Presentation — Silver",
+    recipientType: "upload" as const,
+    requiresComment: false,
+    description: "Upload CSV (Fullname, Email) → generate & email Best Poster Silver award certificate",
+  },
+  "best-poster-gold-certificate": {
+    label: "Best Poster Presentation — Gold",
+    recipientType: "upload" as const,
+    requiresComment: false,
+    description: "Upload CSV (Fullname, Email) → generate & email Best Poster Gold award certificate",
+  },
+  "organizing-committee-certificate": {
+    label: "Organizing Committee",
+    recipientType: "upload" as const,
+    requiresComment: false,
+    description: "Upload CSV (Fullname, Email) → generate & email Organizing Committee appreciation certificate",
+  },
+  "oral-evaluator-certificate": {
+    label: "Oral Presentation Evaluator",
+    recipientType: "upload" as const,
+    requiresComment: false,
+    description: "Upload CSV (Fullname, Email) → generate & email Oral Presentation Evaluator certificate",
+  },
+  "poster-evaluator-certificate": {
+    label: "Poster Presentation Evaluator",
+    recipientType: "upload" as const,
+    requiresComment: false,
+    description: "Upload CSV (Fullname, Email) → generate & email Poster Presentation Evaluator certificate",
+  },
+  "speaker-certificate": {
+    label: "Speaker",
+    recipientType: "upload" as const,
+    requiresComment: false,
+    description: "Upload CSV (Fullname, Email) → generate & email Speaker appreciation certificate",
+  },
+  "session-moderator-certificate": {
+    label: "Session Moderator",
+    recipientType: "upload" as const,
+    requiresComment: false,
+    description: "Upload CSV (Fullname, Email) → generate & email Session Moderator appreciation certificate",
+  },
+  "sponsor-certificate": {
+    label: "Sponsor",
+    recipientType: "upload" as const,
+    requiresComment: false,
+    description: "Upload CSV (Fullname, Email) → generate & email Sponsor appreciation certificate",
+  },
 } as const;
 
 type TemplateId = keyof typeof TEMPLATE_CONFIG;
@@ -211,6 +277,139 @@ function participationCertificateFileName(
     templateOrNonEnglish === "participation-certificate-non-english";
   if (useFixed) return PARTICIPATION_CERT_NON_ENGLISH_FILENAME;
   return buildCertificateFilename("participation", parts);
+}
+
+const UPLOAD_CERTIFICATE_CONFIG: Record<
+  string,
+  { certCode: string; subjectLine: string; emailBody: string[] }
+> = {
+  "best-oral-silver-certificate": {
+    certCode: "best-oral-silver",
+    subjectLine: "Your Best Oral Presentation — Silver Award Certificate - 25th ACCP 2026",
+    emailBody: [
+      "Congratulations! Please find attached your Best Oral Presentation — Silver Award certificate for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).",
+      "",
+      "Thank you for your outstanding presentation.",
+    ],
+  },
+  "best-oral-gold-certificate": {
+    certCode: "best-oral-gold",
+    subjectLine: "Your Best Oral Presentation — Gold Award Certificate - 25th ACCP 2026",
+    emailBody: [
+      "Congratulations! Please find attached your Best Oral Presentation — Gold Award certificate for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).",
+      "",
+      "Thank you for your outstanding presentation.",
+    ],
+  },
+  "best-poster-silver-certificate": {
+    certCode: "best-poster-silver",
+    subjectLine: "Your Best Poster Presentation — Silver Award Certificate - 25th ACCP 2026",
+    emailBody: [
+      "Congratulations! Please find attached your Best Poster Presentation — Silver Award certificate for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).",
+      "",
+      "Thank you for your outstanding presentation.",
+    ],
+  },
+  "best-poster-gold-certificate": {
+    certCode: "best-poster-gold",
+    subjectLine: "Your Best Poster Presentation — Gold Award Certificate - 25th ACCP 2026",
+    emailBody: [
+      "Congratulations! Please find attached your Best Poster Presentation — Gold Award certificate for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).",
+      "",
+      "Thank you for your outstanding presentation.",
+    ],
+  },
+  "organizing-committee-certificate": {
+    certCode: "appreciation-organizing-committee",
+    subjectLine: "Your Certificate of Appreciation (Organizing Committee) - 25th ACCP 2026",
+    emailBody: [
+      "Please find attached your Certificate of Appreciation for your service on the Organizing Committee of the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).",
+      "",
+      "We sincerely thank you for your dedication, commitment, and invaluable contribution to the success of the conference.",
+    ],
+  },
+  "oral-evaluator-certificate": {
+    certCode: "oral-evaluator",
+    subjectLine: "Your Oral Presentation Evaluator Certificate - 25th ACCP 2026",
+    emailBody: [
+      "Please find attached your Certificate of Oral Presentation Evaluator for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).",
+      "",
+      "We greatly appreciate your time and expertise in evaluating oral presentations and helping maintain the scientific quality of the conference.",
+    ],
+  },
+  "poster-evaluator-certificate": {
+    certCode: "poster-evaluator",
+    subjectLine: "Your Poster Presentation Evaluator Certificate - 25th ACCP 2026",
+    emailBody: [
+      "Please find attached your Certificate of Poster Presentation Evaluator for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).",
+      "",
+      "We greatly appreciate your time and expertise in evaluating poster presentations and helping maintain the scientific quality of the conference.",
+    ],
+  },
+  "speaker-certificate": {
+    certCode: "appreciation-speaker",
+    subjectLine: "Your Certificate of Appreciation (Speaker) - 25th ACCP 2026",
+    emailBody: [
+      "Please find attached your Certificate of Appreciation for your contribution as a Speaker at the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).",
+      "",
+      "Thank you for sharing your knowledge and expertise with our participants.",
+    ],
+  },
+  "session-moderator-certificate": {
+    certCode: "appreciation-session-moderator",
+    subjectLine: "Your Certificate of Appreciation (Session Moderator) - 25th ACCP 2026",
+    emailBody: [
+      "Please find attached your Certificate of Appreciation for your role as Session Moderator at the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).",
+      "",
+      "We sincerely thank you for facilitating sessions and ensuring a smooth and productive conference experience.",
+    ],
+  },
+  "sponsor-certificate": {
+    certCode: "appreciation-sponsor",
+    subjectLine: "Your Certificate of Appreciation (Sponsor) - 25th ACCP 2026",
+    emailBody: [
+      "Please find attached your Certificate of Appreciation for your support as a Sponsor of the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).",
+      "",
+      "We sincerely thank you for your generous support and partnership in making this conference a success.",
+    ],
+  },
+};
+
+function isUploadCertificateTemplate(template: string): boolean {
+  return template in UPLOAD_CERTIFICATE_CONFIG;
+}
+
+function getUploadCertificateConfig(template: string) {
+  return UPLOAD_CERTIFICATE_CONFIG[template];
+}
+
+function needsUploadCertificateYOffset(fullName: string): boolean {
+  return /[\u0E00-\u0E7F]/.test(fullName) || /[\u4E00-\u9FFF\uAC00-\uD7AF]/.test(fullName);
+}
+
+function uploadCertificatePdfOptions(fullName: string): { yOffset?: number } {
+  return needsUploadCertificateYOffset(fullName)
+    ? { yOffset: PARTICIPATION_NON_ENGLISH_Y_OFFSET }
+    : {};
+}
+
+/** Content-Disposition and many mail clients only accept ASCII filenames. */
+function isAsciiFilenameSafe(filename: string): boolean {
+  return /^[\x20-\x7E]+$/.test(filename);
+}
+
+function uploadCertificateFileName(certCode: string, fullName: string): string {
+  const fallback = `${certCode}_certificate.pdf`;
+  if (needsUploadCertificateYOffset(fullName)) {
+    return fallback;
+  }
+  const slug = sanitizeCertificateFilenamePart(fullName.replace(/\s+/g, "_"));
+  const fileName = `${certCode}_${slug}.pdf`;
+  return isAsciiFilenameSafe(fileName) ? fileName : fallback;
+}
+
+function isCertificateEmailTemplate(template: string): boolean {
+  return isParticipationCertificateTemplate(template) || isUploadCertificateTemplate(template);
 }
 
 export interface ManualEmailResult {
@@ -457,6 +656,105 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
           .send(buffer);
       } catch (err) {
         fastify.log.error(err, "email-manual participation-certificate PDF error");
+        if (!reply.sent) {
+          return reply.status(500).send({ success: false, error: "Failed to generate certificate PDF" });
+        }
+        return;
+      }
+    },
+  );
+
+  // POST /parse-upload — parse 2-column CSV (Fullname, Email) for award certificate templates
+  fastify.post("/parse-upload", async (request, reply) => {
+    const { template } = request.query as { template?: string };
+    if (!template) {
+      return reply.status(400).send({ success: false, error: "template query parameter is required" });
+    }
+    const cfg = TEMPLATE_CONFIG[template as TemplateId];
+    if (!cfg || cfg.recipientType !== "upload") {
+      return reply.status(400).send({ success: false, error: `Template "${template}" does not support CSV upload` });
+    }
+
+    const data = await request.file();
+    if (!data) {
+      return reply.status(400).send({ success: false, error: "No file uploaded" });
+    }
+
+    const buffer = await data.toBuffer();
+    if (buffer.length > 5 * 1024 * 1024) {
+      return reply.status(400).send({ success: false, error: "Upload exceeds 5 MB limit" });
+    }
+
+    const filename = data.filename.toLowerCase();
+    if (!filename.endsWith(".csv")) {
+      return reply.status(400).send({ success: false, error: "Only CSV uploads are supported" });
+    }
+
+    const parsed = parseAwardCertificateCsv(buffer.toString("utf8"));
+    if (parsed.errors.length > 0 && parsed.recipients.length === 0) {
+      return reply.status(400).send({
+        success: false,
+        error: "CSV validation failed",
+        errors: parsed.errors,
+        warnings: parsed.warnings,
+      });
+    }
+
+    const recipients = parsed.recipients.map((r) => ({
+      id: r.id,
+      label: r.fullName,
+      email: r.email,
+      detail: `Row ${r.id}`,
+      tag: "CSV upload",
+      fullName: r.fullName,
+    }));
+
+    fastify.log.info(
+      `email-manual: parse-upload | template=${template} | file=${data.filename} | rows=${recipients.length} | errors=${parsed.errors.length} | warnings=${parsed.warnings.length}`,
+    );
+
+    return reply.send({
+      success: true,
+      recipients,
+      total: recipients.length,
+      errors: parsed.errors,
+      warnings: parsed.warnings,
+    });
+  });
+
+  // GET /upload-certificate/:template/preview.pdf?fullName=... — preview upload CSV certificate PDF
+  fastify.get<{ Params: { template: string }; Querystring: { fullName?: string } }>(
+    "/upload-certificate/:template/preview.pdf",
+    async (request, reply) => {
+      const { template } = request.params;
+      const fullName = (request.query.fullName ?? "").trim();
+      if (!isUploadCertificateTemplate(template)) {
+        return reply.status(400).send({ success: false, error: `Unknown upload certificate template: ${template}` });
+      }
+      if (!fullName) {
+        return reply.status(400).send({ success: false, error: "fullName query parameter is required" });
+      }
+
+      const uploadCfg = getUploadCertificateConfig(template);
+      const nameParts = toAwardCertificateNameParts(fullName);
+      const certificateName = formatCertificateName(nameParts);
+      const fileName = uploadCertificateFileName(uploadCfg.certCode, fullName);
+
+      try {
+        fastify.log.info(
+          `email-manual: upload-certificate PDF preview | template=${template} | nameOnCert="${certificateName}" | fileName=${fileName}`,
+        );
+        const { buffer } = await generateCertificatePdf(
+          uploadCfg.certCode,
+          nameParts,
+          uploadCertificatePdfOptions(fullName),
+        );
+        return reply
+          .header("Content-Type", "application/pdf")
+          .header("Content-Disposition", `inline; filename="${fileName}"`)
+          .send(buffer);
+      } catch (err) {
+        fastify.log.error(err, "email-manual upload-certificate PDF error");
         if (!reply.sent) {
           return reply.status(500).send({ success: false, error: "Failed to generate certificate PDF" });
         }
@@ -807,18 +1105,31 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
             tag: r.status as string,
           }));
         }
+      } else if (cfg.recipientType === "upload") {
+        recipients = [];
       }
 
-      return reply.send({ success: true, recipients, total: recipients.length });
+      return reply.send({
+        success: true,
+        recipients,
+        total: recipients.length,
+        requiresUpload: cfg.recipientType === "upload",
+      });
     } catch (err) {
       fastify.log.error(err, "email-manual recipients error");
       return reply.status(500).send({ success: false, error: "Failed to load recipients" });
     }
   });
 
-  // GET /render?template=...&id=...&comment=...
+  // GET /render?template=...&id=...&comment=...&fullName=...&email=... (fullName/email for CSV award templates)
   fastify.get("/render", async (request, reply) => {
-    const { template, id, comment } = request.query as { template?: string; id?: string; comment?: string };
+    const { template, id, comment, fullName, email } = request.query as {
+      template?: string;
+      id?: string;
+      comment?: string;
+      fullName?: string;
+      email?: string;
+    };
     const numId = parseInt(id ?? "");
     if (!template || !id || isNaN(numId)) {
       return reply.status(400).send({ success: false, error: "template and id are required" });
@@ -826,6 +1137,27 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
 
     const cfg = TEMPLATE_CONFIG[template as TemplateId];
     if (!cfg) return reply.status(400).send({ success: false, error: `Unknown template: ${template}` });
+
+    if (isUploadCertificateTemplate(template)) {
+      const name = (fullName ?? "").trim();
+      const recipientEmail = (email ?? "").trim();
+      if (!name || !recipientEmail) {
+        return reply.status(400).send({
+          success: false,
+          error: "fullName and email are required for upload certificate preview",
+        });
+      }
+      const uploadCfg = getUploadCertificateConfig(template);
+      const content = buildUploadCertificateEmailContent(name, uploadCfg.subjectLine, uploadCfg.emailBody);
+      const fileName = uploadCertificateFileName(uploadCfg.certCode, name);
+      const downloadUrl = `${getPublicApiBaseUrl()}/api/backoffice/email-manual/upload-certificate/${encodeURIComponent(template)}/preview.pdf?fullName=${encodeURIComponent(name)}`;
+      return reply.send({
+        success: true,
+        to: recipientEmail,
+        ...content,
+        attachment: { fileName, downloadUrl },
+      });
+    }
 
     try {
       if (template === "signup-notification" || template === "pending-approval") {
@@ -1152,16 +1484,17 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // POST / — { template, recipientIds, dryRun, comment? }
+  // POST / — { template, recipientIds, dryRun, comment?, uploadRecipients? }
   fastify.post("/", async (request, reply) => {
     const body = request.body as {
       template: string;
       recipientIds: number[];
       dryRun: boolean;
       comment?: string;
+      uploadRecipients?: Array<{ id: number; fullName: string; email: string }>;
     };
 
-    const { template, recipientIds, dryRun, comment } = body;
+    const { template, recipientIds, dryRun, comment, uploadRecipients } = body;
 
     if (!template || !Array.isArray(recipientIds) || recipientIds.length === 0) {
       return reply.status(400).send({ success: false, error: "template and recipientIds are required" });
@@ -1170,11 +1503,24 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
     const cfg = TEMPLATE_CONFIG[template as TemplateId];
     if (!cfg) return reply.status(400).send({ success: false, error: `Unknown template: ${template}` });
 
+    if (cfg.recipientType === "upload") {
+      if (!Array.isArray(uploadRecipients) || uploadRecipients.length === 0) {
+        return reply.status(400).send({
+          success: false,
+          error: "uploadRecipients is required for CSV-based certificate templates",
+        });
+      }
+    }
+
     const uniqueIds = [...new Set(recipientIds.map(Number))];
+    const uploadRecipientMap =
+      cfg.recipientType === "upload"
+        ? new Map(uploadRecipients!.map((r) => [Number(r.id), r]))
+        : null;
     const results: ManualEmailResult[] = [];
     let delayBeforeNextSend = false;
 
-    if (isParticipationCertificateTemplate(template)) {
+    if (isCertificateEmailTemplate(template)) {
       fastify.log.info(
         `email-manual: ${template} batch start | dryRun=${Boolean(dryRun)} | recipientCount=${uniqueIds.length} | ids=[${uniqueIds.slice(0, 20).join(",")}${uniqueIds.length > 20 ? ",…" : ""}]`,
       );
@@ -1183,7 +1529,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
     try {
       for (const id of uniqueIds) {
         if (delayBeforeNextSend) {
-          if (isParticipationCertificateTemplate(template)) {
+          if (isCertificateEmailTemplate(template)) {
             fastify.log.info(
               `email-manual: ${template} delay ${EMAIL_SEND_DELAY_MS}ms after previous send before next PDF generate`,
             );
@@ -1695,15 +2041,100 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
               results.push({ id, email: reg.email, name: fullName, type: template, status: "failed", reason: String(err) });
             }
           }
+        // ── CSV upload certificate templates ───────────────────────────────
+        } else if (cfg.recipientType === "upload") {
+          const row = uploadRecipientMap!.get(id);
+          if (!row) {
+            results.push({
+              id, email: "—", name: "—", type: template,
+              status: "skipped", reason: `Upload row #${id} not found`,
+            });
+            continue;
+          }
+
+          const fullName = row.fullName.trim();
+          const recipientEmail = row.email.trim();
+          const uploadCfg = getUploadCertificateConfig(template);
+
+          if (!fullName) {
+            results.push({
+              id, email: recipientEmail, name: "—", type: template,
+              status: "skipped", reason: "Fullname is empty",
+            });
+            continue;
+          }
+          if (!recipientEmail) {
+            results.push({
+              id, email: "—", name: fullName, type: template,
+              status: "skipped", reason: "Email is empty",
+            });
+            continue;
+          }
+
+          if (dryRun) {
+            fastify.log.info(
+              `email-manual: ${template} dry-run | rowId=${id} | to=${recipientEmail} | name="${fullName}"`,
+            );
+            results.push({ id, email: recipientEmail, name: fullName, type: template, status: "pending" });
+            continue;
+          }
+
+          try {
+            const nameParts = toAwardCertificateNameParts(fullName);
+            const certificateName = formatCertificateName(nameParts);
+            const fileName = uploadCertificateFileName(uploadCfg.certCode, fullName);
+
+            fastify.log.info(
+              `email-manual: ${template} generate PDF | rowId=${id} | to=${recipientEmail} | nameOnCert="${certificateName}" | fileName=${fileName}`,
+            );
+            const pdfStartedAt = Date.now();
+            const { buffer } = await generateCertificatePdf(
+              uploadCfg.certCode,
+              nameParts,
+              uploadCertificatePdfOptions(fullName),
+            );
+            const pdfElapsedMs = Date.now() - pdfStartedAt;
+            fastify.log.info(
+              `email-manual: ${template} PDF ready | rowId=${id} | fileName=${fileName} | size=${buffer.length} bytes | elapsed=${pdfElapsedMs}ms`,
+            );
+
+            fastify.log.info(
+              `email-manual: ${template} delay ${EMAIL_SEND_DELAY_MS}ms after PDF before send | rowId=${id}`,
+            );
+            await delay(EMAIL_SEND_DELAY_MS);
+
+            const mailStartedAt = Date.now();
+            await sendUploadCertificateEmail(
+              recipientEmail,
+              fullName,
+              uploadCfg.subjectLine,
+              uploadCfg.emailBody,
+              { content: buffer, fileName },
+            );
+            const mailElapsedMs = Date.now() - mailStartedAt;
+            fastify.log.info(
+              `email-manual: ${template} sent | rowId=${id} | to=${recipientEmail} | nameOnCert="${certificateName}" | fileName=${fileName} | pdfBytes=${buffer.length} | pdfMs=${pdfElapsedMs} | mailMs=${mailElapsedMs} | status=sent`,
+            );
+            results.push({ id, email: recipientEmail, name: fullName, type: template, status: "sent" });
+          } catch (err) {
+            fastify.log.error(
+              { err },
+              `email-manual: ${template} failed | rowId=${id} | to=${recipientEmail} | name="${fullName}"`,
+            );
+            results.push({
+              id, email: recipientEmail, name: fullName, type: template,
+              status: "failed", reason: String(err),
+            });
+          }
         }
 
         if (results.length > resultCountBefore) {
           const last = results[results.length - 1];
           if (last.status === "sent" || last.status === "failed") {
             delayBeforeNextSend = true;
-            if (isParticipationCertificateTemplate(template)) {
+            if (isCertificateEmailTemplate(template)) {
               fastify.log.info(
-                `email-manual: ${template} will delay ${EMAIL_SEND_DELAY_MS}ms before next PDF generate | lastRegId=${last.id} | lastStatus=${last.status}`,
+                `email-manual: ${template} will delay ${EMAIL_SEND_DELAY_MS}ms before next PDF generate | lastId=${last.id} | lastStatus=${last.status}`,
               );
             }
           }
@@ -1717,7 +2148,7 @@ export default async function emailManualRoutes(fastify: FastifyInstance) {
         failed: results.filter((r) => r.status === "failed").length,
       };
 
-      if (isParticipationCertificateTemplate(template)) {
+      if (isCertificateEmailTemplate(template)) {
         fastify.log.info(
           `email-manual: ${template} batch done | dryRun=${Boolean(dryRun)} | sent=${summary.sent} | failed=${summary.failed} | skipped=${summary.skipped} | pending=${summary.pending} | total=${results.length}`,
         );

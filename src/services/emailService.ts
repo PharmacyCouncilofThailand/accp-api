@@ -1609,6 +1609,75 @@ export async function sendParticipationCertificateEmail(
   await sendNipaMailEmail(email, content.subject, content.plainText, [attachment]);
 }
 
+/** Manual Email — CSV upload certificate plaintext (same pattern as participation). */
+export function buildUploadCertificatePlainText(
+  fullName: string,
+  bodyParagraphs: string[],
+): string {
+  return [
+    `Dear ${fullName.trim()},`,
+    ``,
+    ...bodyParagraphs,
+    ``,
+    `Sincerely,`,
+    `25th ACCP committee`,
+    `Bangkok Thailand`,
+  ].join("\n");
+}
+
+export function buildUploadCertificateEmailContent(
+  fullName: string,
+  subjectLine: string,
+  bodyParagraphs: string[],
+): { subject: string; html: string; plainText: string } {
+  const plainText = buildUploadCertificatePlainText(fullName, bodyParagraphs);
+  return {
+    subject: subjectLine,
+    html: plainText
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br>\n"),
+    plainText,
+  };
+}
+
+export async function sendUploadCertificateEmail(
+  email: string,
+  fullName: string,
+  subjectLine: string,
+  bodyParagraphs: string[],
+  attachment: EmailAttachment,
+): Promise<void> {
+  const content = buildUploadCertificateEmailContent(fullName, subjectLine, bodyParagraphs);
+  await sendNipaMailEmail(email, content.subject, content.plainText, [attachment]);
+}
+
+/** @deprecated Use buildUploadCertificateEmailContent */
+export function buildAwardCertificateEmailContent(
+  fullName: string,
+  awardTitle: string,
+  subjectLine: string,
+): { subject: string; html: string; plainText: string } {
+  return buildUploadCertificateEmailContent(fullName, subjectLine, [
+    `Congratulations! Please find attached your ${awardTitle} certificate for the 25th Asian Conference on Clinical Pharmacy (2026 ACCP).`,
+    ``,
+    `Thank you for your outstanding presentation.`,
+  ]);
+}
+
+/** @deprecated Use sendUploadCertificateEmail */
+export async function sendAwardCertificateEmail(
+  email: string,
+  fullName: string,
+  awardTitle: string,
+  subjectLine: string,
+  attachment: EmailAttachment,
+): Promise<void> {
+  const content = buildAwardCertificateEmailContent(fullName, awardTitle, subjectLine);
+  await sendNipaMailEmail(email, content.subject, content.plainText, [attachment]);
+}
+
 export async function sendContactFormEmail(
   name: string,
   email: string,
